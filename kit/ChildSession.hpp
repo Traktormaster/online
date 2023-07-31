@@ -288,6 +288,9 @@ public:
 
     bool isTileInsideVisibleArea(const TileDesc& tile) const;
 
+
+    int (*getSendURPToClient())(const signed char* pBuffer, int nLen);
+
 private:
     bool loadDocument(const StringVector& tokens);
 
@@ -416,6 +419,11 @@ private:
     bool _isDumpingTiles;
 
     Util::Rectangle _clientVisibleArea;
+
+    void* m_sendURPToLOContext;
+    int (*m_sendURPToLO)(void* pContext, const signed char*, int);
+
+    std::function<bool(const char* pBuffer, int nLen)> m_sendURPToClientContext;
 };
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

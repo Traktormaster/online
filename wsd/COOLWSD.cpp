@@ -2453,6 +2453,9 @@ void COOLWSD::innerInitialize(Application& self)
     std::string fontsMissingHandling = config::getString("fonts_missing.handling", "log");
     setenv("FONTS_MISSING_HANDLING", fontsMissingHandling.c_str(), 1);
 
+    bool enableWebsocketURP = COOLWSD::getConfigValue<bool>("security.enable_websocket_urp", false);
+    setenv("ENABLE_WEBSOCKET_URP", enableWebsocketURP ? "true" : "false", 1);
+
     IsBindMountingEnabled = getConfigValue<bool>(conf, "mount_jail_tree", true);
 #if CODE_COVERAGE
     // Code coverage is not supported with bind-mounting.

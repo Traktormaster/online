@@ -487,6 +487,12 @@ bool ClientSession::_handleInput(const char *buffer, int length)
         }
     }
 
+    if (tokens.equals(0, "urp"))
+    {
+        LOG_INF("UNO remote protocol message (from client): " << firstLine);
+        forwardToChild(std::string(buffer, length), docBroker);
+        return true;
+    }
     if (tokens.equals(0, "coolclient"))
     {
         if (tokens.size() < 2)
@@ -1046,6 +1052,7 @@ bool ClientSession::_handleInput(const char *buffer, int length)
              tokens.equals(0, "windowselecttext") ||
              tokens.equals(0, "setpage") ||
              tokens.equals(0, "uno") ||
+             tokens.equals(0, "urp") ||
              tokens.equals(0, "useractive") ||
              tokens.equals(0, "userinactive") ||
              tokens.equals(0, "paintwindow") ||
@@ -1353,7 +1360,7 @@ bool ClientSession::sendCombinedTiles(const char* /*buffer*/, int /*length*/, co
 bool ClientSession::forwardToChild(const std::string& message,
                                    const std::shared_ptr<DocumentBroker>& docBroker)
 {
-    const bool binary = Util::startsWith(message, "paste") ? true : false;
+    const bool binary = Util::startsWith(message, "paste") || Util::startsWith(message, "urp");
     return docBroker->forwardToChild(client_from_this(), message, binary);
 }
 
@@ -1592,6 +1599,12 @@ bool ClientSession::handleKitToClientMessage(const std::shared_ptr<Message>& pay
         {
             LOG_WRN("Expected json unocommandresult. Ignoring: " << firstLine);
         }
+    }
+    else if (tokens.equals(0, "urp:"))
+    {
+        LOG_INF("UNO remote protocol message (to client): " << firstLine);
+        forwardToClient(payload);
+        return true;
     }
     else if (tokens.equals(0, "error:"))
     {

@@ -10,6 +10,7 @@
 #include "Kit.hpp"
 #include "ChildSession.hpp"
 #include "MobileApp.hpp"
+#include "COOLWSD.hpp"
 
 #include <climits>
 #include <fstream>
@@ -96,6 +97,20 @@ std::string formatUnoCommandInfo(const std::string& sessionId, const std::string
 
 }
 
+int sendURPToClient(void* pContext /* std::function* of sendBinaryFrame */,
+                    const signed char* pBuffer, int nLen)
+{
+    static const std::string header = "urp:\n";
+    size_t responseSize = header.size() + nLen;
+    char* response = new char[responseSize];
+    std::memcpy(response, header.data(), header.size());
+    std::memcpy(response + header.size(), pBuffer, nLen);
+    KitSocketPoll::mainPoll->addCallback([pContext, response, responseSize]() {
+        (*(std::function<bool(const char* buffer, int length)>*)pContext)(response, responseSize);
+    });
+    return 0;
+}
+
 ChildSession::ChildSession(
     const std::shared_ptr<ProtocolHandlerInterface> &protocol,
     const std::string& id,
@@ -113,6 +128,18 @@ ChildSession::ChildSession(
     _isDumpingTiles(false),
     _clientVisibleArea(0, 0, 0, 0)
 {
+    if (std::string(std::getenv("ENABLE_WEBSOCKET_URP")) == "true")
+    {
+        LOG_WRN("Starting a URP tunnel for a websocket connection");
+
+        m_sendURPToClientContext = [this](const char* buffer, int length) {
+            return sendBinaryFrame(buffer, length);
+        };
+
+        docManager.getLOKit()->startURP(&m_sendURPToClientContext, &m_sendURPToLOContext,
+                                        sendURPToClient, &m_sendURPToLO);
+    }
+
     LOG_INF("ChildSession ctor [" << getName() << "]. JailRoot: [" << _jailRoot << ']');
 }
 
@@ -345,6 +372,23 @@ bool ChildSession::_handleInput(const char *buffer, int length)
         }
 
         return success;
+    }
+    else if (tokens.equals(0, "urp"))
+    {
+        if (length < 4)
+            return false;
+
+        if (std::string(std::getenv("ENABLE_WEBSOCKET_URP")) == "true")
+        {
+            m_sendURPToLO(m_sendURPToLOContext, (signed char*)(buffer + 4),
+                          length - 4); // HACK: not portable as char may be unsigned
+            return true;
+        }
+        else
+        {
+            sendTextFrameAndLogError("error: cmd=" + tokens[0] + " kind=urpnotenabled");
+            return false;
+        }
     }
     else if (!_isDocLoaded)
     {
