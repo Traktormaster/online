@@ -2269,176 +2269,210 @@ std::shared_ptr<lok::Document> getLOKDocumentForAndroidOnly()
 
 #endif
 
-KitSocketPoll::KitSocketPoll()
-    : SocketPoll("kit")
+class KitSocketPoll final : public SocketPoll
 {
-#ifdef IOS
-    terminationFlag = false;
-#endif
-    mainPoll = this;
-}
+    std::chrono::steady_clock::time_point _pollEnd;
+    std::shared_ptr<Document> _document;
 
-KitSocketPoll::~KitSocketPoll()
-{
-    // Just to make it easier to set a breakpoint
-    mainPoll = nullptr;
-}
+    static KitSocketPoll* mainPoll;
 
-void KitSocketPoll::dumpGlobalState(std::ostream& oss)
-{
-    if (mainPoll)
+    KitSocketPoll()
+        : SocketPoll("kit")
     {
-        if (!mainPoll->_document)
-            oss << "KitSocketPoll: no doc\n";
+#ifdef IOS
+        terminationFlag = false;
+#endif
+        mainPoll = this;
+    }
+
+public:
+    ~KitSocketPoll()
+    {
+        // Just to make it easier to set a breakpoint
+        mainPoll = nullptr;
+    }
+
+    static void dumpGlobalState(std::ostream& oss)
+    {
+        if (mainPoll)
+        {
+            if (!mainPoll->_document)
+                oss << "KitSocketPoll: no doc\n";
+            else
+            {
+                mainPoll->_document->dumpState(oss);
+                mainPoll->dumpState(oss);
+            }
+        }
+        else
+            oss << "KitSocketPoll: none\n";
+    }
+
+    static std::shared_ptr<KitSocketPoll> create()
+    {
+        std::shared_ptr<KitSocketPoll> result(new KitSocketPoll());
+
+#ifdef IOS
+        std::unique_lock<std::mutex> lock(KSPollsMutex);
+        KSPolls.push_back(result);
+#endif
+        return result;
+    }
+
+    // process pending message-queue events.
+    void drainQueue()
+    {
+        SigUtil::checkDumpGlobalState(dump_kit_state);
+
+        if (_document)
+            _document->drainQueue();
+    }
+
+    // called from inside poll, inside a wakeup
+    void wakeupHook() { _pollEnd = std::chrono::steady_clock::now(); }
+
+    // a LOK compatible poll function merging the functions.
+    // returns the number of events signalled
+    int kitPoll(int timeoutMicroS)
+    {
+        ProfileZone profileZone("KitSocketPoll::kitPoll");
+
+        if (SigUtil::getTerminationFlag())
+        {
+            LOG_TRC("Termination of unipoll mainloop flagged");
+            return -1;
+        }
+
+        // The maximum number of extra events to process beyond the first.
+        int maxExtraEvents = 15;
+        int eventsSignalled = 0;
+
+        auto startTime = std::chrono::steady_clock::now();
+
+        // handle processtoidle waiting optimization
+        bool checkForIdle = ProcessToIdleDeadline >= startTime;
+
+        if (timeoutMicroS < 0)
+        {
+            // Flush at most 1 + maxExtraEvents, or return when nothing left.
+            while (poll(std::chrono::microseconds::zero()) > 0 && maxExtraEvents-- > 0)
+                ++eventsSignalled;
+        }
         else
         {
-            mainPoll->_document->dumpState(oss);
-            mainPoll->dumpState(oss);
+            if (checkForIdle)
+                timeoutMicroS = 0;
+
+            // Flush at most maxEvents+1, or return when nothing left.
+            _pollEnd = startTime + std::chrono::microseconds(timeoutMicroS);
+            do
+            {
+                int realTimeout = timeoutMicroS;
+                if (_document && _document->hasQueueItems())
+                    realTimeout = 0;
+
+                if (poll(std::chrono::microseconds(realTimeout)) <= 0)
+                    break;
+
+                const auto now = std::chrono::steady_clock::now();
+                drainQueue();
+
+                timeoutMicroS =
+                    std::chrono::duration_cast<std::chrono::microseconds>(_pollEnd - now).count();
+                ++eventsSignalled;
+            } while (timeoutMicroS > 0 && !SigUtil::getTerminationFlag() && maxExtraEvents-- > 0);
         }
-    }
-    else
-        oss << "KitSocketPoll: none\n";
-}
 
-std::shared_ptr<KitSocketPoll> KitSocketPoll::create()
-{
-    std::shared_ptr<KitSocketPoll> result(new KitSocketPoll());
-
-#ifdef IOS
-    std::unique_lock<std::mutex> lock(KSPollsMutex);
-    KSPolls.push_back(result);
-#endif
-    return result;
-}
-
-// process pending message-queue events.
-void KitSocketPoll::drainQueue()
-{
-    SigUtil::checkDumpGlobalState(dump_kit_state);
-
-    if (_document)
-        _document->drainQueue();
-}
-
-// called from inside poll, inside a wakeup
-void KitSocketPoll::wakeupHook() { _pollEnd = std::chrono::steady_clock::now(); }
-
-// a LOK compatible poll function merging the functions.
-// returns the number of events signalled
-int KitSocketPoll::kitPoll(int timeoutMicroS)
-{
-    ProfileZone profileZone("KitSocketPoll::kitPoll");
-
-    if (SigUtil::getTerminationFlag())
-    {
-        LOG_TRC("Termination of unipoll mainloop flagged");
-        return -1;
-    }
-
-    // The maximum number of extra events to process beyond the first.
-    int maxExtraEvents = 15;
-    int eventsSignalled = 0;
-
-    auto startTime = std::chrono::steady_clock::now();
-
-    // handle processtoidle waiting optimization
-    bool checkForIdle = ProcessToIdleDeadline >= startTime;
-
-    if (timeoutMicroS < 0)
-    {
-        // Flush at most 1 + maxExtraEvents, or return when nothing left.
-        while (poll(std::chrono::microseconds::zero()) > 0 && maxExtraEvents-- > 0)
-            ++eventsSignalled;
-    }
-    else
-    {
-        if (checkForIdle)
-            timeoutMicroS = 0;
-
-        // Flush at most maxEvents+1, or return when nothing left.
-        _pollEnd = startTime + std::chrono::microseconds(timeoutMicroS);
-        do
+        if (_document && checkForIdle && eventsSignalled == 0 && timeoutMicroS > 0 &&
+            !hasCallbacks() && !hasBuffered())
         {
-            int realTimeout = timeoutMicroS;
-            if (_document && _document->hasQueueItems())
-                realTimeout = 0;
-
-            if (poll(std::chrono::microseconds(realTimeout)) <= 0)
-                break;
-
-            const auto now = std::chrono::steady_clock::now();
-            drainQueue();
-
-            timeoutMicroS =
-                std::chrono::duration_cast<std::chrono::microseconds>(_pollEnd - now).count();
-            ++eventsSignalled;
-        } while (timeoutMicroS > 0 && !SigUtil::getTerminationFlag() && maxExtraEvents-- > 0);
-    }
-
-    if (_document && checkForIdle && eventsSignalled == 0 && timeoutMicroS > 0 && !hasCallbacks() &&
-        !hasBuffered())
-    {
-        auto remainingTime = ProcessToIdleDeadline - startTime;
-        LOG_TRC("Poll of "
+            auto remainingTime = ProcessToIdleDeadline - startTime;
+            LOG_TRC(
+                "Poll of "
                 << timeoutMicroS << " vs. remaining time of: "
                 << std::chrono::duration_cast<std::chrono::microseconds>(remainingTime).count());
-        // would we poll until then if we could ?
-        if (remainingTime < std::chrono::microseconds(timeoutMicroS))
-            _document->checkIdle();
-        else
-            LOG_TRC("Poll of would not close gap - continuing");
-    }
+            // would we poll until then if we could ?
+            if (remainingTime < std::chrono::microseconds(timeoutMicroS))
+                _document->checkIdle();
+            else
+                LOG_TRC("Poll of would not close gap - continuing");
+        }
 
-    drainQueue();
+        drainQueue();
 
-    if (_document)
-    {
-        _document->trimIfExcessive();
-    }
+        if (_document)
+        {
+            _document->trimIfExcessive();
+        }
 
 #if !MOBILEAPP
-    flushTraceEventRecordings();
+        flushTraceEventRecordings();
 
-    if (_document && _document->purgeSessions() == 0)
-    {
-        LOG_INF("Last session discarded. Setting TerminationFlag");
-        SigUtil::setTerminationFlag();
-        return -1;
-    }
+        if (_document && _document->purgeSessions() == 0)
+        {
+            LOG_INF("Last session discarded. Setting TerminationFlag");
+            SigUtil::setTerminationFlag();
+            return -1;
+        }
 #endif
-    // Report the number of events we processed.
-    return eventsSignalled;
-}
-
-void KitSocketPoll::setDocument(std::shared_ptr<Document> document)
-{
-    _document = std::move(document);
-}
-
-// unusual LOK event from another thread, push into our loop to process.
-bool KitSocketPoll::pushToMainThread(LibreOfficeKitCallback callback, int type, const char* p,
-                                     void* data)
-{
-    if (mainPoll && mainPoll->getThreadOwner() != std::this_thread::get_id())
-    {
-        LOG_TRC("Unusual push callback to main thread");
-        std::shared_ptr<std::string> pCopy;
-        if (p)
-            pCopy = std::make_shared<std::string>(p, strlen(p));
-        mainPoll->addCallback([=] {
-            LOG_TRC("Unusual process callback in main thread");
-            callback(type, pCopy ? pCopy->c_str() : nullptr, data);
-        });
-        return true;
+        // Report the number of events we processed.
+        return eventsSignalled;
     }
-    return false;
-}
+
+    void setDocument(std::shared_ptr<Document> document) { _document = std::move(document); }
+
+    // unusual LOK event from another thread, push into our loop to process.
+    static bool pushToMainThread(LibreOfficeKitCallback callback, int type, const char* p,
+                                 void* data)
+    {
+        if (mainPoll && mainPoll->getThreadOwner() != std::this_thread::get_id())
+        {
+            LOG_TRC("Unusual push callback to main thread");
+            std::shared_ptr<std::string> pCopy;
+            if (p)
+                pCopy = std::make_shared<std::string>(p, strlen(p));
+            mainPoll->addCallback([=] {
+                LOG_TRC("Unusual process callback in main thread");
+                callback(type, pCopy ? pCopy->c_str() : nullptr, data);
+            });
+            return true;
+        }
+        return false;
+    }
+
+    // we can also directly push callbacks into the main thread when needed...
+    static bool pushToMainThread(const SocketPoll::CallbackFn& cb)
+    {
+        if (mainPoll && mainPoll->getThreadOwner() != std::this_thread::get_id())
+        {
+            LOG_TRC("Unusual directly push callback to main thread");
+            mainPoll->addCallback(cb);
+            return true;
+        }
+        return false;
+    }
+
+#ifdef IOS
+    static std::mutex KSPollsMutex;
+    // static std::condition_variable KSPollsCV;
+    static std::vector<std::weak_ptr<KitSocketPoll>> KSPolls;
+
+    std::mutex terminationMutex;
+    std::condition_variable terminationCV;
+    bool terminationFlag;
+#endif
+};
 
 KitSocketPoll *KitSocketPoll::mainPoll = nullptr;
 
 bool pushToMainThread(LibreOfficeKitCallback cb, int type, const char *p, void *data)
 {
     return KitSocketPoll::pushToMainThread(cb, type, p, data);
+}
+
+bool pushToMainThread(const SocketPoll::CallbackFn& cb)
+{
+    return KitSocketPoll::pushToMainThread(cb);
 }
 
 #ifdef IOS

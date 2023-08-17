@@ -8,12 +8,12 @@
 #pragma once
 
 #include <Poco/Util/XMLConfiguration.h>
-#include "Socket.hpp"
 #include <map>
 #include <string>
 
 #include <common/Util.hpp>
 #include <wsd/TileDesc.hpp>
+#include "Socket.hpp"
 
 #define LOK_USE_UNSTABLE_API
 #include <LibreOfficeKit/LibreOfficeKit.hxx>
@@ -41,48 +41,6 @@ void lokit_main(
 #endif
                 std::size_t numericIdentifier
                 );
-
-class Document;
-class KitSocketPoll final : public SocketPoll
-{
-    std::chrono::steady_clock::time_point _pollEnd;
-    std::shared_ptr<Document> _document;
-
-    KitSocketPoll();
-
-public:
-    static KitSocketPoll* mainPoll;
-
-    ~KitSocketPoll();
-
-    static void dumpGlobalState(std::ostream& oss);
-
-    static std::shared_ptr<KitSocketPoll> create();
-
-    /// process pending message-queue events.
-    void drainQueue();
-
-    /// called from inside poll, inside a wakeup
-    void wakeupHook();
-
-    /// a LOK compatible poll function merging the functions.
-    /// returns the number of events signalled
-    int kitPoll(int timeoutMicroS);
-
-    void setDocument(std::shared_ptr<Document> document);
-
-    static bool pushToMainThread(LibreOfficeKitCallback callback, int type, const char* p,
-                                 void* data);
-
-#ifdef IOS
-    static std::mutex KSPollsMutex;
-    static std::vector<std::weak_ptr<KitSocketPoll>> KSPolls;
-
-    std::mutex terminationMutex;
-    std::condition_variable terminationCV;
-    bool terminationFlag;
-#endif
-};
 
 #ifdef IOS
 void runKitLoopInAThread();
@@ -207,5 +165,9 @@ std::shared_ptr<lok::Document> getLOKDocumentForAndroidOnly();
 #endif
 
 extern _LibreOfficeKit* loKitPtr;
+
+// Abnormally we sometimes have functions to directly push
+// into the main thread
+bool pushToMainThread(const SocketPoll::CallbackFn& cb);
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

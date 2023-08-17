@@ -105,7 +105,7 @@ int sendURPToClient(void* pContext /* std::function* of sendBinaryFrame */,
     char* response = new char[responseSize];
     std::memcpy(response, header.data(), header.size());
     std::memcpy(response + header.size(), pBuffer, nLen);
-    KitSocketPoll::mainPoll->addCallback([pContext, response, responseSize]() {
+    pushToMainThread([pContext, response, responseSize]() {
         static_cast<ChildSession*>(pContext)->sendBinaryFrame(response, responseSize);
     });
     return 0;
