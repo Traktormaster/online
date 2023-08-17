@@ -489,9 +489,11 @@ bool ClientSession::_handleInput(const char *buffer, int length)
 
     if (tokens.equals(0, "urp"))
     {
-        LOG_INF("UNO remote protocol message (from client): " << firstLine);
-        forwardToChild(std::string(buffer, length), docBroker);
-        return true;
+        // This can't be pushed down into the long list of tokens that are
+        // forwarded to the child later as we need it to be able to run before
+        // documents are loaded
+        LOG_TRC("UNO remote protocol message (from client): " << firstLine);
+        return forwardToChild(std::string(buffer, length), docBroker);
     }
     if (tokens.equals(0, "coolclient"))
     {
@@ -1599,12 +1601,6 @@ bool ClientSession::handleKitToClientMessage(const std::shared_ptr<Message>& pay
         {
             LOG_WRN("Expected json unocommandresult. Ignoring: " << firstLine);
         }
-    }
-    else if (tokens.equals(0, "urp:"))
-    {
-        LOG_INF("UNO remote protocol message (to client): " << firstLine);
-        forwardToClient(payload);
-        return true;
     }
     else if (tokens.equals(0, "error:"))
     {

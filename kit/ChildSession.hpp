@@ -288,9 +288,6 @@ public:
 
     bool isTileInsideVisibleArea(const TileDesc& tile) const;
 
-
-    int (*getSendURPToClient())(const signed char* pBuffer, int nLen);
-
 private:
     bool loadDocument(const StringVector& tokens);
 
@@ -423,7 +420,8 @@ private:
     void* m_sendURPToLOContext;
     int (*m_sendURPToLO)(void* pContext, const signed char*, int);
 
-    std::function<bool(const char* pBuffer, int nLen)> m_sendURPToClientContext;
+    /// whether there is a URP session created for this ChildSession
+    bool m_hasURP;
 };
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

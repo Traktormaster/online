@@ -106,38 +106,37 @@ int sendURPToClient(void* pContext /* std::function* of sendBinaryFrame */,
     std::memcpy(response, header.data(), header.size());
     std::memcpy(response + header.size(), pBuffer, nLen);
     KitSocketPoll::mainPoll->addCallback([pContext, response, responseSize]() {
-        (*(std::function<bool(const char* buffer, int length)>*)pContext)(response, responseSize);
+        static_cast<ChildSession*>(pContext)->sendBinaryFrame(response, responseSize);
     });
     return 0;
 }
 
-ChildSession::ChildSession(
-    const std::shared_ptr<ProtocolHandlerInterface> &protocol,
-    const std::string& id,
-    const std::string& jailId,
-    const std::string& jailRoot,
-    DocumentManagerInterface& docManager) :
-    Session(protocol, "ToMaster-" + id, id, false),
-    _jailId(jailId),
-    _jailRoot(jailRoot),
-    _docManager(&docManager),
-    _viewId(-1),
-    _isDocLoaded(false),
-    _copyToClipboard(false),
-    _canonicalViewId(-1),
-    _isDumpingTiles(false),
-    _clientVisibleArea(0, 0, 0, 0)
+ChildSession::ChildSession(const std::shared_ptr<ProtocolHandlerInterface>& protocol,
+                           const std::string& id, const std::string& jailId,
+                           const std::string& jailRoot, DocumentManagerInterface& docManager)
+    : Session(protocol, "ToMaster-" + id, id, false)
+    , _jailId(jailId)
+    , _jailRoot(jailRoot)
+    , _docManager(&docManager)
+    , _viewId(-1)
+    , _isDocLoaded(false)
+    , _copyToClipboard(false)
+    , _canonicalViewId(-1)
+    , _isDumpingTiles(false)
+    , _clientVisibleArea(0, 0, 0, 0)
+    , m_hasURP(false)
 {
     if (std::string(std::getenv("ENABLE_WEBSOCKET_URP")) == "true")
     {
-        LOG_WRN("Starting a URP tunnel for a websocket connection");
+        LOG_WRN("URP is enabled in the config: Starting a URP tunnel for this session ["
+                << getName() << "]");
 
-        m_sendURPToClientContext = [this](const char* buffer, int length) {
-            return sendBinaryFrame(buffer, length);
-        };
+        m_hasURP = docManager.getLOKit()->startURP(this, &m_sendURPToLOContext, sendURPToClient,
+                                                   &m_sendURPToLO);
 
-        docManager.getLOKit()->startURP(&m_sendURPToClientContext, &m_sendURPToLOContext,
-                                        sendURPToClient, &m_sendURPToLO);
+        if (!m_hasURP)
+            LOG_INF("Failed to start a URP bridge for this session [" << getName()
+                                                                      << "], disabling URP");
     }
 
     LOG_INF("ChildSession ctor [" << getName() << "]. JailRoot: [" << _jailRoot << ']');
@@ -147,6 +146,11 @@ ChildSession::~ChildSession()
 {
     LOG_INF("~ChildSession dtor [" << getName() << ']');
     disconnect();
+
+    if (m_hasURP)
+    {
+        _docManager->getLOKit()->stopURP(m_sendURPToLOContext);
+    }
 }
 
 void ChildSession::disconnect()
@@ -378,7 +382,7 @@ bool ChildSession::_handleInput(const char *buffer, int length)
         if (length < 4)
             return false;
 
-        if (std::string(std::getenv("ENABLE_WEBSOCKET_URP")) == "true")
+        if (m_hasURP)
         {
             m_sendURPToLO(m_sendURPToLOContext, (signed char*)(buffer + 4),
                           length - 4); // HACK: not portable as char may be unsigned
