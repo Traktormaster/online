@@ -162,6 +162,12 @@ using Poco::Net::PartHandler;
 #endif
 #endif
 
+#ifdef __linux__
+#if !MOBILEAPP
+#include <sys/inotify.h>
+#endif
+#endif
+
 using namespace COOLProtocol;
 
 using Poco::DirectoryIterator;
@@ -1000,6 +1006,118 @@ private:
 /// This thread listens for and accepts prisoner kit processes.
 /// And also cleans up and balances the correct number of children.
 static std::unique_ptr<PrisonPoll> PrisonerPoll;
+
+#ifdef __linux__
+#if !MOBILEAPP
+class InotifyPoll : public TerminatingPoll
+{
+public:
+    InotifyPoll(bool stopOnConfigChange, std::vector<std::string> initialConfigFiles)
+        : TerminatingPoll("inotify_poll")
+        , m_stopOnConfigChange(stopOnConfigChange)
+    {
+        LOG_WRN("InotifyPoll init, stopOnConfigChange is " << stopOnConfigChange);
+        if (!stopOnConfigChange)
+            return;
+        m_fd = inotify_init(); // TODO: see if we want to add back init1 with IN_NONBLOCK
+
+        if (m_fd == -1)
+        {
+            LOG_WRN("Inotify - Failed to start a watcher for the configuration, disabling "
+                    "stop_on_config_change");
+            stopOnConfigChange = false;
+            return;
+        }
+
+        for (std::string configFile : initialConfigFiles)
+        {
+            watch(configFile);
+        }
+        LOG_TRC("Inotify initialized with " << initialConfigFiles.size()
+                                            << " initial config file(s)");
+    }
+
+    /// Check for file changes, stop the server if we find any
+    void wakeupHook() override;
+    bool watch(std::string configFile);
+
+private:
+    bool m_stopOnConfigChange;
+    int m_fd = -1;
+    int m_watchedCount = 0;
+};
+
+bool InotifyPoll::watch(const std::string configFile)
+{
+    LOG_TRC("Inotify - Attempting to watch " << configFile << ", in addition to current "
+                                             << m_watchedCount << " watched files");
+
+    if (m_fd == -1)
+    {
+        LOG_WRN("Inotify - Trying to watch config file " << configFile
+                                                         << " without an inotify file descriptor");
+        return false;
+    }
+
+    int watchedStatus;
+    watchedStatus = inotify_add_watch(m_fd, configFile.c_str(), IN_MODIFY);
+    // FIXME: IN_MODIFY does not work with vim, as vim modifies the file by moving it and creating a new one
+    // See https://vi.stackexchange.com/questions/25030/vim-not-firing-inotify-events-when-writing-file for an explanation
+
+    if (watchedStatus == -1)
+        LOG_WRN("Inotify - Failed to watch config file " << configFile);
+    else
+        m_watchedCount++;
+
+    return watchedStatus != -1;
+}
+
+void InotifyPoll::wakeupHook()
+{
+    LOG_TRC("InotifyPoll - woken up. Reload on config change: "
+            << m_stopOnConfigChange << ", Watching " << m_watchedCount << " files");
+    if (!m_stopOnConfigChange)
+        return;
+
+    char buf[4096];
+    const struct inotify_event* event;
+    ssize_t len;
+
+    LOG_TRC("InotifyPoll - Checking for config changes...");
+
+    while (true)
+    {
+        len = read(m_fd, buf, sizeof(buf));
+
+        if (len == -1 && errno != EAGAIN)
+        {
+            // Some read error, EAGAIN is when there is no data so let's not warn for it
+            LOG_WRN("InotifyPoll - Read error " << std::strerror(errno)
+                                                << " when trying to get events");
+        }
+        else if (len == -1)
+        {
+            LOG_TRC("InotifyPoll - Got to end of data when reading inotify");
+        }
+
+        if (len <= 0)
+            break;
+
+        for (char* ptr = buf; ptr < buf + len; ptr += sizeof(struct inotify_event) + event->len)
+        {
+            event = (const struct inotify_event*)ptr;
+
+            LOG_WRN("InotifyPoll - Config file " << event->name << " was modified, stopping COOLWSD");
+            SigUtil::requestShutdown();
+        }
+    }
+}
+
+/// This thread listens for config changes and stops the server
+/// as needed
+static std::unique_ptr<InotifyPoll> InotifiedPoll;
+#endif // if !MOBILEAPP
+#endif // #ifdef __linux__
 
 /// The Web Server instance with the accept socket poll thread.
 class COOLWSDServer;
@@ -2034,6 +2152,7 @@ void COOLWSD::innerInitialize(Application& self)
         { "ssl.sts.max_age", "31536000" },
         { "ssl.key_file_path", COOLWSD_CONFIGDIR "/key.pem" },
         { "ssl.termination", "true" },
+        { "stop_on_config_change", "false" },
         { "storage.filesystem[@allow]", "false" },
         // "storage.ssl.enable" - deliberately not set; for back-compat
         { "storage.wopi.max_file_size", "0" },
@@ -2702,6 +2821,13 @@ void COOLWSD::innerInitialize(Application& self)
 
     LOG_TRC("Initialize FileServerRequestHandler");
     FileServerRequestHandler::initialize(COOLWSD::FileServerRoot);
+
+#ifdef __linux__
+    std::vector<std::string> configFiles = { "/etc/coolwsd/coolwsd.xml" };
+
+    InotifiedPoll = std::make_unique<InotifyPoll>(
+        getConfigValue<bool>("stop_on_config_change", false), configFiles);
+#endif
 #endif
 
     WebServerPoll = std::make_unique<TerminatingPoll>("websrv_poll");
@@ -5809,6 +5935,10 @@ int COOLWSD::innerMain()
     const auto startStamp = std::chrono::steady_clock::now();
 #if !MOBILEAPP
     auto stampFetch = startStamp - (fetchUpdateCheck - std::chrono::milliseconds(60000));
+
+#ifdef __linux__
+    InotifiedPoll->startThread();
+#endif
 #endif
 
     while (!SigUtil::getShutdownRequestFlag())
@@ -5830,6 +5960,13 @@ int COOLWSD::innerMain()
 
         // Wake the prisoner poll to spawn some children, if necessary.
         PrisonerPoll->wakeup();
+
+#ifdef __linux__
+#if !MOBILEAPP
+        // Wake the inotify poll to check if we should stop due to config changes, if enabled.
+        InotifiedPoll->wakeup();
+#endif
+#endif
 
         const auto timeNow = std::chrono::steady_clock::now();
         const std::chrono::milliseconds timeSinceStartMs
