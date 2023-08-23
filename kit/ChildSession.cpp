@@ -126,13 +126,13 @@ ChildSession::ChildSession(const std::shared_ptr<ProtocolHandlerInterface>& prot
     , _clientVisibleArea(0, 0, 0, 0)
     , m_hasURP(false)
 {
-    if (std::string(std::getenv("ENABLE_WEBSOCKET_URP")) == "true")
+    if (isURPEnabled())
     {
         LOG_WRN("URP is enabled in the config: Starting a URP tunnel for this session ["
                 << getName() << "]");
 
-        m_hasURP = docManager.getLOKit()->startURP(this, &m_sendURPToLOContext, sendURPToClient,
-                                                   &m_sendURPToLO);
+        m_hasURP = startURP(docManager.getLOKit(), this, &m_sendURPToLOContext, sendURPToClient,
+                            &m_sendURPToLO);
 
         if (!m_hasURP)
             LOG_INF("Failed to start a URP bridge for this session [" << getName()

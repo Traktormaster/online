@@ -127,6 +127,9 @@ static bool AnonymizeUserData = false;
 static uint64_t AnonymizationSalt = 82589933;
 #endif
 
+static bool EnableWebsocketURP = false;
+static int URPStartCount = 0;
+
 /// When chroot is enabled, this is blank as all
 /// the paths inside the jail, relative to it's jail.
 /// E.g. /tmp/user/docs/...
@@ -2837,6 +2840,9 @@ void lokit_main(
 
     LOG_INF("User-data anonymization is " << (AnonymizeUserData ? "enabled." : "disabled."));
 
+    const char* pEnableWebsocketURP = std::getenv("ENABLE_WEBSOCKET_URP");
+    EnableWebsocketURP = std::string(pEnableWebsocketURP) == "true";
+
     assert(!childRoot.empty());
     assert(!sysTemplate.empty());
     assert(!loTemplate.empty());
@@ -3299,6 +3305,38 @@ std::string anonymizeUrl(const std::string& url)
 #else
     return url;
 #endif
+}
+
+bool isURPEnabled() { return EnableWebsocketURP; }
+
+bool startURP(std::shared_ptr<lok::Office> LOKit, void* pReceiveURPFromLOContext,
+              void** ppSendURPToLOContext,
+              int (*fnReceiveURPFromLO)(void* pContext, const signed char* pBuffer, int nLen),
+              int (**pfnSendURPToLO)(void* pContext, const signed char* pBuffer, int nLen))
+{
+    if (!isURPEnabled())
+    {
+        LOG_ERR("URP/WS: Attempted to start a URP session but URP is disabled");
+        return false;
+    }
+    if (URPStartCount > 0)
+    {
+        LOG_WRN("URP/WS: Not starting another URP session as one has already been opened for this "
+                "kit instance");
+        return false;
+    }
+
+    bool coreURPSuccess = LOKit->startURP(pReceiveURPFromLOContext, ppSendURPToLOContext,
+                                          fnReceiveURPFromLO, pfnSendURPToLO);
+
+    if (!coreURPSuccess)
+    {
+        LOG_ERR("URP/WS: tried to start a URP session but core did not let us");
+        return false;
+    }
+
+    URPStartCount++;
+    return true;
 }
 
 #if !MOBILEAPP

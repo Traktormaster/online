@@ -170,4 +170,13 @@ extern _LibreOfficeKit* loKitPtr;
 // into the main thread
 bool pushToMainThread(const SocketPoll::CallbackFn& cb);
 
+/// Check if URP is enabled
+bool isURPEnabled();
+
+/// Start a URP connection, checking if URP is enabled and there is not already an active URP session
+bool startURP(std::shared_ptr<lok::Office> LOKit, void* pReceiveURPFromLOContext,
+              void** ppSendURPToLOContext,
+              int (*fnReceiveURPFromLO)(void* pContext, const signed char* pBuffer, int nLen),
+              int (**pfnSendURPToLO)(void* pContext, const signed char* pBuffer, int nLen));
+
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */
