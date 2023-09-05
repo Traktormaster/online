@@ -22,7 +22,9 @@
   "globals": {
     "L": true,
     "module": false,
-    "define": false
+    "define": false,
+    "Promise": false,
+    "ArrayBuffer": false
   },
   "env": {
     "browser": true,

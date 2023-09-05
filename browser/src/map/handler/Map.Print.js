@@ -26,7 +26,7 @@ L.Map.Print = L.Handler.extend({
 	_onFileReady: function (e) {
 		// we need to load the pdf document and pass it to the iframe as an
 		// object URL, because else we might have cross origin security problems
-		var xmlHttp = new XMLHttpRequest();
+		var xmlHttp = window.newHttpRequester();
 		xmlHttp.onreadystatechange = L.bind(function () {
 			if (xmlHttp.readyState === 4 && xmlHttp.status === 200) {
 				this._onInitPrint(xmlHttp);
