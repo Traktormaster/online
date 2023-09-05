@@ -1187,6 +1187,20 @@ bool DocumentBroker::download(const std::shared_ptr<ClientSession>& session, con
         _tileCache->setThreadOwner(std::this_thread::get_id());
     }
 
+    // If the document was loaded by a read-only session first, the lock must be acquired by the first
+    // additional session that has write permission. If we do not do this, any save attempt by authorized
+    // sessions will be stuck on lock conflict handling.
+    if (!session->isReadOnly() && !_lockCtx->_isLocked)
+    {
+        std::string error;
+        if (!updateStorageLockState(*session, /*lock=*/true, error))
+        {
+            LOG_ERR("Failed to lock docKey [" << _docKey << "] with session ["
+                                              << session->getId()
+                                              << "] after joining: " << error);
+        }
+    }
+
 #if !MOBILEAPP
     COOLWSD::dumpNewSessionTrace(getJailId(), sessionId, _uriOrig, _storage->getRootFilePath());
 
