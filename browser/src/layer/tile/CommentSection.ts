@@ -93,6 +93,7 @@ export class Comment extends CanvasSectionObject {
 		this.name = data.id === 'new' ? 'new comment': 'comment ' + data.id;
 
 		this.sectionProperties.isRemoved = false;
+		this.sectionProperties.children = []; // This is used for Writer comments. There is parent / child relationship between comments in Writer files.
 
 		this.convertRectanglesToCoreCoordinates(); // Convert rectangle coordiantes into core pixels on initialization.
 	}

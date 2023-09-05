@@ -803,16 +803,28 @@ export class CommentSection extends CanvasSectionObject {
 	}
 
 	public isThreadResolved (annotation: any): boolean {
-		var lastChild = this.getLastChildIndexOf(annotation.sectionProperties.data.id);
-
-		while (this.sectionProperties.commentList[lastChild].sectionProperties.data.parent !== '0') {
-			if (this.sectionProperties.commentList[lastChild].sectionProperties.data.resolved === 'false')
-				return false;
-			lastChild = this.getIndexOf(this.sectionProperties.commentList[lastChild].sectionProperties.data.parent);
+		// If comment has children.
+		if (annotation.sectionProperties.children.length > 0) {
+			for (var i = 0; i < annotation.sectionProperties.children.length; i++) {
+				if (annotation.sectionProperties.children[i].sectionProperties.data.resolved !== 'true')
+					return false;
+			}
+			return true;
 		}
-		if (this.sectionProperties.commentList[lastChild].sectionProperties.data.resolved === 'false')
-			return false;
-		return true;
+		// If it has a parent.
+		else if (annotation.sectionProperties.data.parent !== '0') {
+			var index = this.getChildRootIndexOf(annotation.sectionProperties.data.parent);
+			var comment = this.sectionProperties.commentList[index];
+			if (comment.sectionProperties.data.resolved !== 'true')
+				return false;
+			else if (comment.sectionProperties.children.length > 0) {
+				for (var i = 0; i < comment.sectionProperties.children.length; i++) {
+					if (comment.sectionProperties.children[i].sectionProperties.data.resolved !== 'true')
+						return false;
+				}
+				return true;
+			}
+		}
 	}
 
 	private initializeContextMenus (): void {
@@ -959,7 +971,7 @@ export class CommentSection extends CanvasSectionObject {
 		if (mobileReply)
 			annotation.name += '-reply'; // Section name.
 
-		if (comment.parent && comment.parent > '0') {
+		if (comment.parent && comment.parent !== '0') {
 			var parentIdx = this.getIndexOf(comment.parent);
 
 			if (!this.containerObject.addSection(annotation))
@@ -1031,29 +1043,28 @@ export class CommentSection extends CanvasSectionObject {
 
 	// Adjust parent-child relationship, if required, after `comment` is added
 	public adjustParentAdd (comment: any): void {
-		if (comment.parent && comment.parent > '0') {
+		if (comment.parent && comment.parent !== '0') {
 			var parentIdx = this.getIndexOf(comment.parent);
 			if (parentIdx === -1) {
 				console.warn('adjustParentAdd: No parent comment to attach received comment to. ' +
 				             'Parent comment ID sought is :' + comment.parent + ' for current comment with ID : ' + comment.id);
 				return;
 			}
-			if (this.sectionProperties.commentList[parentIdx + 1] && this.sectionProperties.commentList[parentIdx + 1].sectionProperties.data.parent === this.sectionProperties.commentList[parentIdx].sectionProperties.data.id) {
-				this.sectionProperties.commentList[parentIdx + 1].sectionProperties.data.parent = comment.id;
-			}
+
+			var parentComment = this.sectionProperties.commentList[parentIdx];
+			if (parentComment && !parentComment.sectionProperties.children.includes(comment.id))
+				parentComment.sectionProperties.children.push(comment.id);
 		}
 	}
 
 	// Adjust parent-child relationship, if required, after `comment` is removed
 	public adjustParentRemove (comment: any): void {
-		var newId = '0';
 		var parentIdx = this.getIndexOf(comment.sectionProperties.data.parent);
-		if (parentIdx >= 0) {
-			newId = this.sectionProperties.commentList[parentIdx].sectionProperties.data.id;
-		}
-		var currentIdx = this.getIndexOf(comment.sectionProperties.data.id);
-		if (this.sectionProperties.commentList[currentIdx + 1] && this.sectionProperties.commentList[currentIdx].parentOf(this.sectionProperties.commentList[currentIdx + 1])) {
-			this.sectionProperties.commentList[currentIdx + 1].sectionProperties.data.parent = newId;
+
+		var parentComment = this.sectionProperties.commentList[parentIdx];
+		if (parentComment && parentComment.sectionProperties.children.includes(comment.sectionProperties.data.id)) {
+			var index = parentComment.sectionProperties.children.indexOf(comment.sectionProperties.data.id);
+			parentComment.sectionProperties.children.splice(index, 1);
 		}
 	}
 
@@ -1137,7 +1148,6 @@ export class CommentSection extends CanvasSectionObject {
 			id = obj[dataroot].id;
 			var resolved = this.getComment(id);
 			if (resolved) {
-				var parent = this.sectionProperties.commentList[this.getRootIndexOf(resolved.sectionProperties.data.id)];
 				var resolvedObj;
 				if (changetrack) {
 					if (!this.adjustRedLine(obj.redline)) {
@@ -1269,6 +1279,8 @@ export class CommentSection extends CanvasSectionObject {
 		comment.anchorPix = this.numberArrayToCorePixFromTwips(comment.anchorPos, 0, 2);
 		comment.parthash = comment.parthash ? comment.parthash: null;
 		comment.tab = (comment.tab || comment.tab === 0) ? comment.tab: null;
+		if (comment.parentId)
+			comment.parent = String(comment.parentId);
 
 		if (comment.rectangle) {
 			comment.rectangle = this.stringToRectangles(comment.rectangle)[0]; // This is the position of the marker (Impress & Draw).
@@ -1289,35 +1301,13 @@ export class CommentSection extends CanvasSectionObject {
 			this.adjustCommentFileBasedView(comment);
 	}
 
-	private getScaleFactor (): number {
-		var scaleFactor = 1.0 / this.map.getZoomScale(this.map.options.zoom, this.map.getZoom());
-		if (scaleFactor < 0.4)
-			scaleFactor = 0.4;
-		else if (scaleFactor < 0.6)
-			scaleFactor = 0.6 - (0.6 - scaleFactor) / 2.0;
-		else if (scaleFactor < 0.8)
-			scaleFactor = 0.8;
-		else if (scaleFactor <= 2)
-			scaleFactor = 1;
-		else if (scaleFactor > 2) {
-			scaleFactor = 1 + (scaleFactor - 1) / 10.0;
-			if (scaleFactor > 1.5)
-				scaleFactor = 1.5;
-		}
-		return scaleFactor;
-	}
-
 	// Returns the last comment id of comment thread containing the given id
 	private getLastChildIndexOf (id: any): number {
 		var index = this.getIndexOf(id);
-		if (index < 0)
-			return undefined;
-		for (var idx = index + 1;
-		     idx < this.sectionProperties.commentList.length && this.sectionProperties.commentList[idx].sectionProperties.data.parent === this.sectionProperties.commentList[idx - 1].sectionProperties.data.id;
-		     idx++)
-		{
-			index = idx;
-		}
+
+		do {
+			index++;
+		} while (this.sectionProperties.commentList[index] && index < this.sectionProperties.commentList.length && this.sectionProperties.commentList[index].sectionProperties.data.parent !== '0');
 
 		return index;
 	}
@@ -1551,11 +1541,17 @@ export class CommentSection extends CanvasSectionObject {
 			var comment = this.sectionProperties.commentList[i];
 			var replyCount = 0;
 
-			for (var j = 0; j < this.sectionProperties.commentList.length; j++) {
-				var anotherComment = this.sectionProperties.commentList[j];
-				if (this.getRootIndexOf(anotherComment.sectionProperties.data.id) === i
-					&& anotherComment.sectionProperties.data.resolved !== 'true')
-					replyCount++;
+			if (comment.sectionProperties.data.parent === '0') {
+				var lastIndex = this.getLastChildIndexOf(comment.sectionProperties.data.id);
+				var j = i;
+				while (this.sectionProperties.commentList[j] && j <= lastIndex) {
+					if (this.sectionProperties.commentList[j].sectionProperties.data.parent !== '0') {
+						if (this.sectionProperties.commentList[j].sectionProperties.data.resolved !== 'true') {
+							replyCount++;
+						}
+					}
+					j++;
+				}
 			}
 
 			if (replyCount > 1)
@@ -1568,14 +1564,28 @@ export class CommentSection extends CanvasSectionObject {
 	// Returns the root comment index of given id
 	private getRootIndexOf (id: any): number {
 		var index = this.getIndexOf(id);
-		for (var idx = index - 1;
-			     idx >=0 &&
-				 this.sectionProperties.commentList[idx] &&
-				 this.sectionProperties.commentList[idx + 1] &&
-				 this.sectionProperties.commentList[idx].sectionProperties.data.id === this.sectionProperties.commentList[idx + 1].sectionProperties.data.parent;
-			     idx--)
-		{
-			index = idx;
+
+		while (index >= 0) {
+			if (this.sectionProperties.commentList[index].sectionProperties.data.parent !== '0')
+				index--;
+			else
+				break;
+		}
+
+		return index;
+	}
+
+	// Returns the root comment index of given id
+	private getChildRootIndexOf (id: any): number {
+		var index = this.getIndexOf(id);
+		var comment = this.sectionProperties.commentList[index];
+		var parentId = comment.sectionProperties.data.parent;
+
+		while (index >= 0) {
+			if (this.sectionProperties.commentList[index].sectionProperties.data.id !== parentId)
+				index--;
+			else
+				break;
 		}
 
 		return index;
@@ -1601,8 +1611,8 @@ export class CommentSection extends CanvasSectionObject {
 	}
 
 	private updateResolvedState (comment: any): void {
-		var threadIndexFirst = this.getRootIndexOf(comment.sectionProperties.data.id);
-		if (this.sectionProperties.commentList[threadIndexFirst].sectionProperties.data.resolved !== comment.sectionProperties.data.resolved) {
+		var threadIndexFirst = this.getChildRootIndexOf(comment.sectionProperties.data.id);
+		if (threadIndexFirst !== -1 && this.sectionProperties.commentList[threadIndexFirst].sectionProperties.data.resolved !== comment.sectionProperties.data.resolved) {
 			comment.sectionProperties.data.resolved = this.sectionProperties.commentList[threadIndexFirst].sectionProperties.data.resolved;
 			comment.update();
 			this.update();
@@ -1614,6 +1624,9 @@ export class CommentSection extends CanvasSectionObject {
 			return Math.abs(a.sectionProperties.data.anchorPos[1]) - Math.abs(b.sectionProperties.data.anchorPos[1]) ||
 				Math.abs(a.sectionProperties.data.anchorPos[0]) - Math.abs(b.sectionProperties.data.anchorPos[0]);
 		});
+
+		if (this.sectionProperties.docLayer._docType === 'text')
+			this.orderTextComments();
 
 		// idIndexMap is now invalid, update it.
 		this.updateIdIndexMap();
@@ -1645,6 +1658,63 @@ export class CommentSection extends CanvasSectionObject {
 		return newArray;
 	}
 
+	private addUpdateChildGroups() {
+		var parentCommentList: Array<any> = [];
+		for (var i = 0; i < this.sectionProperties.commentList.length; i++) {
+			var comment = this.sectionProperties.commentList[i];
+			comment.sectionProperties.children = [];
+			if (comment.sectionProperties.data.parent !== '0')
+			{
+				if (!parentCommentList.includes(comment.sectionProperties.data.parent))
+					parentCommentList.push(comment.sectionProperties.data.parent);
+			}
+		}
+
+		for (var i = 0; i < parentCommentList.length; i++) {
+			var parentComment;
+			for (var j = 0; j < this.sectionProperties.commentList.length; j++) {
+				if (this.sectionProperties.commentList[j].sectionProperties.data.id === parentCommentList[i]) {
+					parentComment = this.sectionProperties.commentList[j];
+					break;
+				}
+			}
+
+			if (parentComment) {
+				for (var j = 0; j < this.sectionProperties.commentList.length; j++) {
+					if (this.sectionProperties.commentList[j].sectionProperties.data.parent === parentCommentList[i])
+						parentComment.sectionProperties.children.push(this.sectionProperties.commentList[j]);
+				}
+			}
+			else
+				console.warn('Couldn\'t find parent comment.');
+		}
+	}
+
+	private addChildrenCommentsToList(comment: any, newOrder: Array<any>) {
+		comment.sectionProperties.children.forEach(function(element: any) {
+			newOrder.push(element);
+			if (element.sectionProperties.children.length > 0)
+				this.addChildrenCommentsToList(element, newOrder);
+		}.bind(this));
+	}
+
+	private orderTextComments() {
+		var newOrder = [];
+
+		for (var i = 0; i < this.sectionProperties.commentList.length; i++) {
+			var comment = this.sectionProperties.commentList[i];
+
+			if (comment.sectionProperties.data.parent === '0') {
+				newOrder.push(comment);
+
+				if (comment.sectionProperties.children.length > 0)
+					this.addChildrenCommentsToList(comment, newOrder);
+			}
+		}
+
+		this.sectionProperties.commentList = newOrder;
+	}
+
 	public importComments (commentList: any): void {
 		var comment;
 		this.clearList();
@@ -1655,8 +1725,8 @@ export class CommentSection extends CanvasSectionObject {
 				comment = commentList[i];
 
 				if (comment.cellRange) {
-				        // convert cellRange e.g. "A1 B2" to its bounds in display twips.
-				        comment.cellPos = this.sectionProperties.docLayer._cellRangeToTwipRect(comment.cellRange).toCoreString();
+					// convert cellRange e.g. "A1 B2" to its bounds in display twips.
+					comment.cellPos = this.sectionProperties.docLayer._cellRangeToTwipRect(comment.cellRange).toCoreString();
 				}
 
 				this.adjustComment(comment);
@@ -1670,6 +1740,9 @@ export class CommentSection extends CanvasSectionObject {
 				this.idIndexMap.set(commentSection.sectionProperties.data.id, i);
 				this.updateResolvedState(this.sectionProperties.commentList[i]);
 			}
+
+			if (this.sectionProperties.docLayer._docType === 'text')
+				this.addUpdateChildGroups();
 
 			this.orderCommentList();
 			this.checkSize();
