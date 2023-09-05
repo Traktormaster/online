@@ -382,6 +382,9 @@ m4_ifelse(MOBILEAPP,[true],
       window.zoteroEnabled = %ZOTERO_ENABLED%;
       window.indirectionUrl='%INDIRECTION_URL%';])
 
+// Not setting this is not meaningful with frame-socket, but if the feature as to merged upstream, we would need to control it dynamically again.
+window.checkFileInfoOverride['DownloadAsPostMessage'] = true;
+
 // This is GLOBAL_JS:
 m4_syscmd([cat ]GLOBAL_JS)m4_dnl
 
