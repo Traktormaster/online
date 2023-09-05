@@ -11,6 +11,344 @@ window.app = {
 	console: {}
 };
 
+// The socket goes hiding at reconnect and... eeh?
+function getActiveSocket() {
+	if (window.app.socket && window.app.socket.socket)
+		return window.app.socket.socket;
+	return window.socket;
+}
+// Load access-token from URL fragment if not set already.
+if (!window.accessToken && location.hash) {
+	var tmp = location.hash.indexOf('!');
+	if (tmp > 0 && location.hash.substring(1, tmp) === 'at') {
+		window.accessToken = location.hash.substring(tmp+1);
+	}
+}
+// Extra utilities.
+window.concatByteArray = function(params) {
+  var size = 0;
+  var i;
+  for (i = 0; i < params.length; i++) {
+    size += params[i].byteLength;
+  }
+
+  var result = new Uint8Array(size);
+  var index = 0;
+
+  for (i = 0; i < params.length; i++) {
+    result.set(params[i], index);
+    index += params[i].byteLength;
+  }
+
+  return result;
+};
+// Setup parent-frame proxy socket communication.
+window.parentFrameSocketNumber = 0;
+window.ParentFrameSocket = function(uri) {
+	var that = this;
+	this.uri = uri;
+	this.binaryType = 'arraybuffer';
+	this.bufferedAmount = 0;
+	this.extensions = '';
+	this.protocol = '';
+	this.readyState = 0;
+
+	this.parentFrameNumber = ++window.parentFrameSocketNumber;  // property protects session consistency
+	this.boundRequests = {};
+
+	this.handleParentMessage = function(msg) {
+		if (msg.ws === 'message') {
+			if (this.readyState !== 1) return;
+			this._handleMessage(msg.data);
+		} else if (msg.ws === 'open') {
+			this.readyState = 1;
+			// this.extensions and this.protocol is N/A
+			this.onopen();
+		} else {
+			this.readyState = 3;
+			var keys = Object.keys(this.boundRequests);
+			for (var it in keys) {
+				var key = keys[it];
+				try {
+					this.boundRequests[key].handleError();
+				} catch (e) {
+					console.log('Bound req error handler failed', e);
+				}
+				delete this.boundRequests[key];
+			}
+			if (msg.ws === 'error') {
+				this.onerror();
+			}
+			this.onclose();
+		}
+	};
+
+	this._handleMessage = function(data) {
+		// NOTE: we could assume that data is Uint8Array, because the proxy transport is binary-only
+		if (data instanceof Uint8Array && data.length >= 16) {
+			if (data[0] == 110 && data[1] == 97 && data[2] == 110 && data[3] == 111 && data[4] == 104 && data[5] == 116 && data[6] == 116 && data[7] == 112 && data[8] == 112 && data[9] == 114 && data[10] == 111 && data[11] == 120 && data[12] == 121 && data[13] == 32) {
+				// data starts with "nanohttpproxy "
+				var opNewlinePos = data.indexOf(10, 14);
+				if (opNewlinePos === -1) {
+					console.error('Malformed nanohttpproxy response', data);
+					return;
+				}
+				var requestNumber = parseInt((new TextDecoder()).decode(data.slice(14, opNewlinePos)));
+				var boundRequest = this.boundRequests[requestNumber];
+				if (!boundRequest) {
+					console.error('Invalid nanohttpproxy req-num', requestNumber, data);
+					return;
+				}
+				delete this.boundRequests[requestNumber];
+				var headNewlinePos = data.indexOf(10, opNewlinePos + 1);
+				if (headNewlinePos === -1) {
+					console.warn('Malformed nanohttpproxy response head', data);
+					boundRequest.handleError();
+					return;
+				}
+				try {
+					var respHead = JSON.parse((new TextDecoder()).decode(data.slice(opNewlinePos + 1, headNewlinePos)));
+				} catch (e) {
+					console.warn('Invalid nanohttpproxy response head', data);
+					boundRequest.handleError();
+					return;
+				}
+				boundRequest.handleResponse(respHead, data.slice(headNewlinePos + 1));
+				return;
+			}
+		}
+		// give message to ws client by default
+		this.onmessage({'data': data});
+	};
+
+	this.onclose = function() {};
+	this.onerror = function () {};
+	this.onmessage = function () {};
+	this.onopen = function () {};
+
+	this.close = function() {
+		if (this.readyState >= 2) return;
+		this.readyState = 2;
+		window.parent.postMessage({'ws': 'close', 'num': this.parentFrameNumber}, window.parentFrameOrigin);
+	};
+
+	this.send = function(msg) {
+		if (this.readyState === 0) {
+			throw Error('InvalidStateError');
+		} else if (this.readyState === 1) {
+			window.parent.postMessage({'ws': 'send', 'num': this.parentFrameNumber, 'msg': msg}, window.parentFrameOrigin); // TODO transfer msg if ArrayBuffer?
+		}
+	};
+
+	// http-request binding
+	this.bindRequest = function(httpReq, msg) {
+		this.boundRequests[httpReq.requestNumber] = httpReq;
+		this.send(msg);
+	};
+
+	// init
+	window.parent.postMessage({'ws': 'open', 'num': that.parentFrameNumber, 'uri': that.uri}, window.parentFrameOrigin);
+};
+window.parentFrameSocketHTTPRequestNumber = 0;
+window.ParentFrameSocketHTTPRequest = function() {
+	var that = this;
+	this.readyState = 0;
+	this.response = null;
+	this.responseText = null;
+	this.responseType = 'text';
+	this.responseXML = null;
+	this.status = null;
+	this.statusText = null;
+	this.timeout = 0;
+	this.upload = new EventTarget(); // NOT-IMPLEMENTED: XMLHttpRequestUpload
+	this.withCredentials = false; // NOT-IMPLEMENTED
+
+	this._timeoutHandle = null;
+	this._method = null;
+	this._url = null;
+	this.requestNumber = ++window.parentFrameSocketHTTPRequestNumber;
+
+	this.handleResponse = function(head, data) {
+		this.status = (head && head['status']) || null;
+		if (head['error'] || (this.status && this.status >= 400)) {
+			this.handleError();
+			return;
+		}
+
+		this.readyState = 2;
+		this.onreadystatechange();
+
+		this.response = data;
+		if (this.responseType === 'text') {
+			this.responseText = (new TextDecoder()).decode(this.response);
+		} else if (this.responseType === 'blob') {
+			// NOTE: responseType 'blob' will be kept as 'arraybuffer'
+		}
+
+		if (this._timeoutHandle) {
+			clearTimeout(this._timeoutHandle);
+			this._timeoutHandle = null;
+		}
+		this.readyState = 4;
+		this.onreadystatechange();
+		this.onload();
+		this.onloadend();
+	};
+
+    var _callHandleError = function() { that.handleError(); };
+
+	this.handleError = function() {
+		if (this._timeoutHandle) {
+			clearTimeout(this._timeoutHandle);
+			this._timeoutHandle = null;
+		}
+		this.readyState = 4;
+		this.onreadystatechange();
+		this.onerror();
+		this.onloadend();
+	};
+
+	this.abort = function() {
+		throw 'not implemented';
+	};
+	this.getAllResponseHeaders = function() {
+		throw 'not implemented';
+	};
+	this.getResponseHeader = function() {
+		throw 'not implemented';
+	};
+	this.open = function(method, url, async_, user, passwd) {
+		if (!async_ || user || passwd) {
+			throw 'Unsupported open args for ParentFrameSocketHTTPRequest';
+		}
+		if (method !== 'GET' && method !== 'POST') {
+			throw 'Invalid request method';
+		}
+		this._method = method;
+		this._url = url;
+		this.readyState = 1;
+		this.onreadystatechange();
+	};
+	this.overrideMimeType = function() {
+		throw 'not implemented';
+	};
+	this.send = function(body) {
+		if (this.readyState !== 1) {
+			throw Error('InvalidStateError');
+		}
+		if (this.responseType !== 'text' && this.responseType !== 'blob' && this.responseType !== 'arraybuffer') {
+			throw 'Unsupported responseType';
+		}
+		var pfs = window.getActiveSocket();
+		if (!pfs || pfs.readyState !== 1) {
+			throw 'No active ParentFrameSocket';
+		}
+		var msgCore = {'method': this._method, 'url': this._url};
+		var binFields = [];
+		if (this._method === 'POST' && body) {
+			if (body instanceof FormData) {
+				msgCore['fields'] = {};
+				var iter = body.entries();
+				while (1) {
+					var maybe = iter.next();
+					if (maybe['done']) break;
+					var pair = maybe['value'];
+					if (pair[1] instanceof File || pair[1] instanceof Blob) {
+						binFields.push([pair[0], pair[1].arrayBuffer().then(function(res) { return new Uint8Array(res); })]);
+					} else if (pair[1] instanceof Uint8Array) {
+						binFields.push([pair[0], pair[1]]);
+					} else if (pair[1] instanceof ArrayBuffer) {
+						binFields.push([pair[0], new Uint8Array(pair[1])]);
+					} else {
+						msgCore['fields'][pair[0]] = '' + pair[1];
+					}
+				}
+			} else {
+				throw 'Unsupported data type for body';
+			}
+		}
+		this._sendWait(msgCore, binFields);
+	};
+
+	this._sendWait = function(msgCore, binFields) {
+		var binFieldPair;
+		for (var i = 0 ; i < binFields.length; ++i) {
+			binFieldPair = binFields[i];
+			if (binFieldPair[1] instanceof Promise) {
+				(function(_frozenBinFieldPair) {
+					_frozenBinFieldPair[1].then(function(res) {
+						_frozenBinFieldPair[1] = res;
+						that._sendWait(msgCore, binFields);
+					}).catch(function(err) { console.log(err); });
+				})(binFieldPair);
+				return;
+			}
+		}
+		// repeat some checks
+		if (this.readyState !== 1) {
+			throw Error('InvalidStateError');
+		}
+		if (this.responseType !== 'text' && this.responseType !== 'blob' && this.responseType !== 'arraybuffer') {
+			throw 'Unsupported responseType';
+		}
+		var pfs = window.getActiveSocket();
+		if (!pfs || pfs.readyState !== 1) {
+			throw 'No active ParentFrameSocket';
+		}
+		// process message parts
+		var msgParts = [
+			(new TextEncoder).encode('nanohttpproxy ' + this.requestNumber + '\n'),
+			(new TextEncoder).encode(JSON.stringify(msgCore)),
+		];
+		for (var i = 0 ; i < binFields.length; ++i) {
+			binFieldPair = binFields[i];
+			var msgField = {'name': binFieldPair[0]};
+			msgField['len'] = binFieldPair[1].length;
+			msgParts.push((new TextEncoder).encode('\n' + JSON.stringify(msgField) + '\n'));
+			msgParts.push(binFieldPair[1]);
+		}
+		// assemble full msg
+		var msg = window.concatByteArray(msgParts);
+		pfs.bindRequest(this, msg);
+		if (this.timeout && this.timeout > 0) {
+			this._timeoutHandle = setTimeout(_callHandleError, this.timeout);
+		}
+		this.onloadstart();
+	};
+	this.setRequestHeader = function() {
+		throw 'not implemented';
+	};
+
+	this.onabort = function() {};
+	this.onerror = function() {};
+	this.onload = function() {};
+	this.onloadend = function() {};
+	this.onloadstart = function() {};
+	this.onprogress = function() {};
+	this.onreadystatechange = function() {};
+	this.ontimeout = function() {};
+};
+window.useParentFrameSocket = window.self !== window.parent;
+window.newHttpRequester = function() {
+    if (window.useParentFrameSocket) {
+        return new window.ParentFrameSocketHTTPRequest();
+    }
+	return new XMLHttpRequest();
+};
+if (window.useParentFrameSocket) {
+	var ParentFrameSocketMessageListener = function(e) {
+		if (!(e && e.data && e.origin === window.parentFrameOrigin && e.data.ws && e.data.num))
+			return;
+		var socket = getActiveSocket();
+		if (!(socket && e.data.num === socket.parentFrameNumber)) {
+			window.parent.postMessage({'ws': 'abandon', 'num': e.data.num}, window.parentFrameOrigin);
+			return;
+		}
+		socket.handleParentMessage(e.data);
+	};
+	window.addEventListener('message', ParentFrameSocketMessageListener, false);
+}
+
 // This function may look unused, but it's needed in WASM and Android to send data through the fake websocket. Please
 // don't remove it without first grepping for 'Base64ToArrayBuffer' in the C++ code
 // eslint-disable-next-line
@@ -394,9 +732,18 @@ class BrowserInitializer extends InitializerBase {
 		window.protocolDebug = element.dataset.protocolDebug.toLowerCase().trim() === "true";
 		window.enableDebug = element.dataset.enableDebug.toLowerCase().trim() === "true";
 		window.frameAncestors = decodeURIComponent(element.dataset.frameAncestors);
+		// The first item in the frameAncestors must be the target domain where this application will be embedded.
+		window.parentFrameOrigin = window.frameAncestors.substring(
+			0,
+			(window.frameAncestors.indexOf(' ') > 0 ? window.frameAncestors.indexOf(' ') : window.frameAncestors.length)
+		);
 		window.socketProxy = element.dataset.socketProxy.toLowerCase().trim() === "true";
 		window.uiDefaults = JSON.parse(atob(element.dataset.uiDefaults));
-		window.checkFileInfoOverride = element.dataset.checkFileInfoOverride;
+		if (window.useParentFrameSocket) { // Not setting this is not meaningful with frame-socket.
+			window.checkFileInfoOverride = {'DownloadAsPostMessage': true};
+		} else { // NOTE: original forgets to load the JSON, so it never works... yay
+			window.checkFileInfoOverride = element.dataset.checkFileInfoOverride;
+		}
 		window.deeplEnabled = element.dataset.deeplEnabled.toLowerCase().trim() === "true";
 		window.zoteroEnabled = element.dataset.zoteroEnabled.toLowerCase().trim() === "true";
 		window.documentSigningEnabled = element.dataset.documentSigningEnabled.toLowerCase().trim() === "true";
@@ -1626,6 +1973,8 @@ function getInitializerClass() {
 		} else if (global.indirectionUrl != '' && !global.migrating) {
 			global.indirectSocket = true;
 			return new global.IndirectSocket(uri);
+		} else if (window.useParentFrameSocket) {
+			return new window.ParentFrameSocket(uri);
 		} else {
 			return new WebSocket(uri);
 		}

@@ -250,7 +250,7 @@ L.Clipboard = L.Class.extend({
 	// completeFn: called on completion - with response.
 	// progressFn: allows splitting the progress bar up.
 	_doAsyncDownload: async function(type,url,optionalFormData,forClipboard,progressFn,) {
-		var request = new XMLHttpRequest();
+		var request = window.newHttpRequester();
 
 		// avoid to invoke the following code if the download widget depends on user interaction
 		if (!this._downloadProgress || this._downloadProgress.isClosed()) {

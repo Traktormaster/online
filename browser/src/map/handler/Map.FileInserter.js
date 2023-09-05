@@ -152,7 +152,7 @@ L.Map.FileInserter = L.Handler.extend({
 			};
 			reader.readAsArrayBuffer(file);
 		} else {
-			var xmlHttp = new XMLHttpRequest();
+			var xmlHttp = window.newHttpRequester();
 			this._map.showBusy(_('Uploading...'), false);
 			xmlHttp.onreadystatechange = function () {
 				if (xmlHttp.readyState === 4) {
