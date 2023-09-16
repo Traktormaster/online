@@ -11,29 +11,30 @@ window.app = {
 };
 
 // The socket goes hiding at reconnect and... eeh?
-function get_socket() {
+function getActiveSocket() {
 	if (window.app.socket && window.app.socket.socket)
 		return window.app.socket.socket;
 	return window.socket;
 }
 // Load access-token from URL fragment if not set already.
 if (!window.accessToken && location.hash) {
-	var tmp = location.hash.indexOf("!");
-	if (tmp > 0 && location.hash.substring(1, tmp) === "at") {
+	var tmp = location.hash.indexOf('!');
+	if (tmp > 0 && location.hash.substring(1, tmp) === 'at') {
 		window.accessToken = location.hash.substring(tmp+1);
 	}
 }
 // Extra utilities.
 window.concatByteArray = function(params) {
-  let size = 0;
-  for (let i = 0; i < params.length; i++) {
+  var size = 0;
+  var i;
+  for (i = 0; i < params.length; i++) {
     size += params[i].byteLength;
   }
 
-  let result = new Uint8Array(size);
-  let index = 0;
+  var result = new Uint8Array(size);
+  var index = 0;
 
-  for (let i = 0; i < params.length; i++) {
+  for (i = 0; i < params.length; i++) {
     result.set(params[i], index);
     index += params[i].byteLength;
   }
@@ -53,26 +54,27 @@ window.ParentFrameSocket = function(uri) {
 	this.readyState = 0;
 
 	this.parentFrameNumber = ++window.parentFrameSocketNumber;  // property protects session consistency
-	this.bound_reqs = {};
+	this.boundRequests = {};
 
 	this.handleParentMessage = function(msg) {
 		if (msg.ws === 'message') {
 			if (this.readyState !== 1) return;
-			this._handle_message(msg.data);
+			this._handleMessage(msg.data);
 		} else if (msg.ws === 'open') {
 			this.readyState = 1;
 			// this.extensions and this.protocol is N/A
 			this.onopen();
 		} else {
 			this.readyState = 3;
-			var keys = Object.keys(this.bound_reqs);
-			for (var key of keys) {
+			var keys = Object.keys(this.boundRequests);
+			for (var it in keys) {
+				var key = keys[it];
 				try {
-					this.bound_reqs[key].handle_error();
+					this.boundRequests[key].handleError();
 				} catch (e) {
 					console.log('Bound req error handler failed', e);
-				};
-				delete this.bound_reqs[key];
+				}
+				delete this.boundRequests[key];
 			}
 			if (msg.ws === 'error') {
 				this.onerror();
@@ -81,37 +83,37 @@ window.ParentFrameSocket = function(uri) {
 		}
 	};
 
-	this._handle_message = function(data) {
+	this._handleMessage = function(data) {
 		// NOTE: we could assume that data is Uint8Array, because the proxy transport is binary-only
 		if (data instanceof Uint8Array && data.length >= 16) {
 			if (data[0] == 110 && data[1] == 97 && data[2] == 110 && data[3] == 111 && data[4] == 104 && data[5] == 116 && data[6] == 116 && data[7] == 112 && data[8] == 112 && data[9] == 114 && data[10] == 111 && data[11] == 120 && data[12] == 121 && data[13] == 32) {
 				// data starts with "nanohttpproxy "
-				var op_newline_pos = data.indexOf(10, 14);
-				if (op_newline_pos === -1) {
+				var opNewlinePos = data.indexOf(10, 14);
+				if (opNewlinePos === -1) {
 					console.error('Malformed nanohttpproxy response', data);
-					return
-				}
-				var req_num = parseInt((new TextDecoder()).decode(data.slice(14, op_newline_pos)));
-				var bound_req = this.bound_reqs[req_num];
-				if (!bound_req) {
-					console.error('Invalid nanohttpproxy req-num', req_num, data);
 					return;
 				}
-				delete this.bound_reqs[req_num];
-				var head_newline_pos = data.indexOf(10, op_newline_pos + 1);
-				if (head_newline_pos === -1) {
+				var requestNumber = parseInt((new TextDecoder()).decode(data.slice(14, opNewlinePos)));
+				var boundRequest = this.boundRequests[requestNumber];
+				if (!boundRequest) {
+					console.error('Invalid nanohttpproxy req-num', requestNumber, data);
+					return;
+				}
+				delete this.boundRequests[requestNumber];
+				var headNewlinePos = data.indexOf(10, opNewlinePos + 1);
+				if (headNewlinePos === -1) {
 					console.warn('Malformed nanohttpproxy response head', data);
-					bound_req.handle_error();
+					boundRequest.handleError();
 					return;
 				}
 				try {
-					var resp_head = JSON.parse((new TextDecoder()).decode(data.slice(op_newline_pos + 1, head_newline_pos)));
-				} catch {
+					var respHead = JSON.parse((new TextDecoder()).decode(data.slice(opNewlinePos + 1, headNewlinePos)));
+				} catch (e) {
 					console.warn('Invalid nanohttpproxy response head', data);
-					bound_req.handle_error();
+					boundRequest.handleError();
 					return;
 				}
-				bound_req.handle_response(resp_head, data.slice(head_newline_pos + 1));
+				boundRequest.handleResponse(respHead, data.slice(headNewlinePos + 1));
 				return;
 			}
 		}
@@ -132,15 +134,15 @@ window.ParentFrameSocket = function(uri) {
 
 	this.send = function(msg) {
 		if (this.readyState === 0) {
-			throw Error("InvalidStateError");
+			throw Error('InvalidStateError');
 		} else if (this.readyState === 1) {
 			window.parent.postMessage({'ws': 'send', 'num': this.parentFrameNumber, 'msg': msg}, window.parentFrameOrigin); // TODO transfer msg if ArrayBuffer?
 		}
 	};
 
 	// http-request binding
-	this.bind_request = function(http_req, msg) {
-		this.bound_reqs[http_req.req_num] = http_req;
+	this.bind_request = function(httpReq, msg) {
+		this.boundRequests[httpReq.requestNumber] = httpReq;
 		this.send(msg);
 	};
 
@@ -161,15 +163,15 @@ window.ParentFrameSocketHTTPRequest = function() {
 	this.upload = new EventTarget(); // NOT-IMPLEMENTED: XMLHttpRequestUpload
 	this.withCredentials = false; // NOT-IMPLEMENTED
 
-	this._timeout_h = null;
+	this._timeoutHandle = null;
 	this._method = null;
 	this._url = null;
-	this.req_num = ++window.parentFrameSocketHTTPRequestNumber;
+	this.requestNumber = ++window.parentFrameSocketHTTPRequestNumber;
 
-	this.handle_response = function(head, data) {
+	this.handleResponse = function(head, data) {
 		this.status = (head && head['status']) || null;
 		if (head['error'] || (this.status && this.status >= 400)) {
-			this.handle_error();
+			this.handleError();
 			return;
 		}
 
@@ -183,38 +185,38 @@ window.ParentFrameSocketHTTPRequest = function() {
 			// NOTE: responseType 'blob' will be kept as 'arraybuffer'
 		}
 
-		if (this._timeout_h) {
-			clearTimeout(this._timeout_h);
-			this._timeout_h = null;
+		if (this._timeoutHandle) {
+			clearTimeout(this._timeoutHandle);
+			this._timeoutHandle = null;
 		}
 		this.readyState = 4;
 		this.onreadystatechange();
 		this.onload();
 		this.onloadend();
-	}
+	};
 
-    var _call_handle_error = function() { that.handle_error() };
+    var _callHandleError = function() { that.handleError(); };
 
-	this.handle_error = function() {
-		if (this._timeout_h) {
-			clearTimeout(this._timeout_h);
-			this._timeout_h = null;
+	this.handleError = function() {
+		if (this._timeoutHandle) {
+			clearTimeout(this._timeoutHandle);
+			this._timeoutHandle = null;
 		}
 		this.readyState = 4;
 		this.onreadystatechange();
 		this.onerror();
 		this.onloadend();
-	}
+	};
 
 	this.abort = function() {
 		throw 'not implemented';
 	};
 	this.getAllResponseHeaders = function() {
 		throw 'not implemented';
-	}
-	this.getResponseHeader = function(h) {
+	};
+	this.getResponseHeader = function() {
 		throw 'not implemented';
-	}
+	};
 	this.open = function(method, url, async_, user, passwd) {
 		if (!async_ || user || passwd) {
 			throw 'Unsupported open args for ParentFrameSocketHTTPRequest';
@@ -226,52 +228,59 @@ window.ParentFrameSocketHTTPRequest = function() {
 		this._url = url;
 		this.readyState = 1;
 		this.onreadystatechange();
-	}
-	this.overrideMimeType = function(h) {
+	};
+	this.overrideMimeType = function() {
 		throw 'not implemented';
-	}
+	};
 	this.send = function(body) {
 		if (this.readyState !== 1) {
-			throw Error("InvalidStateError");
+			throw Error('InvalidStateError');
 		}
 		if (this.responseType !== 'text' && this.responseType !== 'blob' && this.responseType !== 'arraybuffer') {
 			throw 'Unsupported responseType';
 		}
-		var pfs = window.get_socket();
+		var pfs = window.getActiveSocket();
 		if (!pfs || pfs.readyState !== 1) {
 			throw 'No active ParentFrameSocket';
 		}
-		var msg_core = {'method': this._method, 'url': this._url};
-		var bin_fields = [];
+		var msgCore = {'method': this._method, 'url': this._url};
+		var binFields = [];
 		if (this._method === 'POST' && body) {
 			if (body instanceof FormData) {
-				msg_core['fields'] = {};
-				for (var pair of body.entries()) {
+				msgCore['fields'] = {};
+				var iter = body.entries();
+				while (1) {
+					var maybe = iter.next();
+					if (maybe['done']) break;
+					var pair = maybe['value'];
 					if (pair[1] instanceof File || pair[1] instanceof Blob) {
-						bin_fields.push([pair[0], pair[1].arrayBuffer().then((res) => new Uint8Array(res))]);
+						binFields.push([pair[0], pair[1].arrayBuffer().then(function(res) { return new Uint8Array(res); })]);
 					} else if (pair[1] instanceof Uint8Array) {
-						bin_fields.push([pair[0], pair[1]]);
+						binFields.push([pair[0], pair[1]]);
 					} else if (pair[1] instanceof ArrayBuffer) {
-						bin_fields.push([pair[0], new Uint8Array(pair[1])]);
+						binFields.push([pair[0], new Uint8Array(pair[1])]);
 					} else {
-						msg_core['fields'][pair[0]] = '' + pair[1];
+						msgCore['fields'][pair[0]] = '' + pair[1];
 					}
 				}
 			} else {
 				throw 'Unsupported data type for body';
 			}
 		}
-		this._send_wait(msg_core, bin_fields);
-	}
+		this._send_wait(msgCore, binFields);
+	};
 
-	this._send_wait = function(msg_core, bin_fields) {
-		for (var i = 0 ; i < bin_fields.length; ++i) {
-			var bin_field_pair = bin_fields[i];
-			if (bin_field_pair[1] instanceof Promise) {
-				bin_field_pair[1].then((res) => {
-					bin_field_pair[1] = res;
-					that._send_wait(msg_core, bin_fields);
-				}).catch((err) => console.log(err));
+	this._send_wait = function(msgCore, binFields) {
+		var binFieldPair;
+		for (var i = 0 ; i < binFields.length; ++i) {
+			binFieldPair = binFields[i];
+			if (binFieldPair[1] instanceof Promise) {
+				(function(_frozenBinFieldPair){
+					_frozenBinFieldPair[1].then(function(res) {
+						_frozenBinFieldPair[1] = res;
+						that._send_wait(msgCore, binFields);
+					}).catch(function(err) { console.log(err); });
+				})(binFieldPair);
 				return;
 			}
 		}
@@ -282,33 +291,33 @@ window.ParentFrameSocketHTTPRequest = function() {
 		if (this.responseType !== 'text' && this.responseType !== 'blob' && this.responseType !== 'arraybuffer') {
 			throw 'Unsupported responseType';
 		}
-		var pfs = window.get_socket();
+		var pfs = window.getActiveSocket();
 		if (!pfs || pfs.readyState !== 1) {
 			throw 'No active ParentFrameSocket';
 		}
 		// process message parts
 		var msg_parts = [
-			(new TextEncoder).encode('nanohttpproxy ' + this.req_num + '\n'),
-			(new TextEncoder).encode(JSON.stringify(msg_core)),
+			(new TextEncoder).encode('nanohttpproxy ' + this.requestNumber + '\n'),
+			(new TextEncoder).encode(JSON.stringify(msgCore)),
 		];
-		for (var i = 0 ; i < bin_fields.length; ++i) {
-			var bin_field_pair = bin_fields[i];
-			var msg_field = {'name': bin_field_pair[0]};
-			msg_field["len"] = bin_field_pair[1].length;
+		for (var i = 0 ; i < binFields.length; ++i) {
+			binFieldPair = binFields[i];
+			var msg_field = {'name': binFieldPair[0]};
+			msg_field['len'] = binFieldPair[1].length;
 			msg_parts.push((new TextEncoder).encode('\n' + JSON.stringify(msg_field) + '\n'));
-			msg_parts.push(bin_field_pair[1]);
+			msg_parts.push(binFieldPair[1]);
 		}
 		// assemble full msg
 		var msg = window.concatByteArray(msg_parts);
 		pfs.bind_request(this, msg);
 		if (this.timeout && this.timeout > 0) {
-			this._timeout_h = setTimeout(_call_handle_error, this.timeout);
+			this._timeoutHandle = setTimeout(_callHandleError, this.timeout);
 		}
 		this.onloadstart();
-	}
-	this.setRequestHeader = function(h, v) {
+	};
+	this.setRequestHeader = function() {
 		throw 'not implemented';
-	}
+	};
 
 	this.onabort = function() {};
 	this.onerror = function() {};
@@ -320,7 +329,7 @@ window.ParentFrameSocketHTTPRequest = function() {
 	this.ontimeout = function() {};
 };
 window.useParentFrameSocket = window.self !== window.parent;
-window.new_http_requester = function() {
+window.newHttpRequester = function() {
     if (window.useParentFrameSocket) {
         return new window.ParentFrameSocketHTTPRequest();
     }
@@ -330,7 +339,7 @@ if (window.useParentFrameSocket) {
 	var ParentFrameSocketMessageListener = function(e) {
 		if (!(e && e.data && e.origin === window.parentFrameOrigin && e.data.ws && e.data.num))
 			return;
-		var socket = get_socket();
+		var socket = getActiveSocket();
 		if (!(socket && e.data.num === socket.parentFrameNumber)) {
 			window.parent.postMessage({'ws': 'abandon', 'num': e.data.num}, window.parentFrameOrigin);
 			return;

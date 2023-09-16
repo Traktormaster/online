@@ -204,7 +204,7 @@ L.Clipboard = L.Class.extend({
 	_doAsyncDownload: function(type,url,optionalFormData,forClipboard,completeFn,progressFn,onErrorFn) {
 		try {
 			var that = this;
-			var request = window.new_http_requester();
+			var request = window.newHttpRequester();
 
 			// avoid to invoke the following code if the download widget depends on user interaction
 			if (!that._downloadProgress || !that._downloadProgress.isVisible()) {
