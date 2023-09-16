@@ -141,7 +141,7 @@ window.ParentFrameSocket = function(uri) {
 	};
 
 	// http-request binding
-	this.bind_request = function(httpReq, msg) {
+	this.bindRequest = function(httpReq, msg) {
 		this.boundRequests[httpReq.requestNumber] = httpReq;
 		this.send(msg);
 	};
@@ -267,18 +267,18 @@ window.ParentFrameSocketHTTPRequest = function() {
 				throw 'Unsupported data type for body';
 			}
 		}
-		this._send_wait(msgCore, binFields);
+		this._sendWait(msgCore, binFields);
 	};
 
-	this._send_wait = function(msgCore, binFields) {
+	this._sendWait = function(msgCore, binFields) {
 		var binFieldPair;
 		for (var i = 0 ; i < binFields.length; ++i) {
 			binFieldPair = binFields[i];
 			if (binFieldPair[1] instanceof Promise) {
-				(function(_frozenBinFieldPair){
+				(function(_frozenBinFieldPair) {
 					_frozenBinFieldPair[1].then(function(res) {
 						_frozenBinFieldPair[1] = res;
-						that._send_wait(msgCore, binFields);
+						that._sendWait(msgCore, binFields);
 					}).catch(function(err) { console.log(err); });
 				})(binFieldPair);
 				return;
@@ -286,7 +286,7 @@ window.ParentFrameSocketHTTPRequest = function() {
 		}
 		// repeat some checks
 		if (this.readyState !== 1) {
-			throw Error("InvalidStateError");
+			throw Error('InvalidStateError');
 		}
 		if (this.responseType !== 'text' && this.responseType !== 'blob' && this.responseType !== 'arraybuffer') {
 			throw 'Unsupported responseType';
@@ -296,20 +296,20 @@ window.ParentFrameSocketHTTPRequest = function() {
 			throw 'No active ParentFrameSocket';
 		}
 		// process message parts
-		var msg_parts = [
+		var msgParts = [
 			(new TextEncoder).encode('nanohttpproxy ' + this.requestNumber + '\n'),
 			(new TextEncoder).encode(JSON.stringify(msgCore)),
 		];
 		for (var i = 0 ; i < binFields.length; ++i) {
 			binFieldPair = binFields[i];
-			var msg_field = {'name': binFieldPair[0]};
-			msg_field['len'] = binFieldPair[1].length;
-			msg_parts.push((new TextEncoder).encode('\n' + JSON.stringify(msg_field) + '\n'));
-			msg_parts.push(binFieldPair[1]);
+			var msgField = {'name': binFieldPair[0]};
+			msgField['len'] = binFieldPair[1].length;
+			msgParts.push((new TextEncoder).encode('\n' + JSON.stringify(msgField) + '\n'));
+			msgParts.push(binFieldPair[1]);
 		}
 		// assemble full msg
-		var msg = window.concatByteArray(msg_parts);
-		pfs.bind_request(this, msg);
+		var msg = window.concatByteArray(msgParts);
+		pfs.bindRequest(this, msg);
 		if (this.timeout && this.timeout > 0) {
 			this._timeoutHandle = setTimeout(_callHandleError, this.timeout);
 		}
