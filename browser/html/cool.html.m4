@@ -383,7 +383,12 @@ m4_ifelse(MOBILEAPP,[true],
       window.indirectionUrl='%INDIRECTION_URL%';])
 
 // Not setting this is not meaningful with frame-socket, but if the feature as to merged upstream, we would need to control it dynamically again.
-window.checkFileInfoOverride['DownloadAsPostMessage'] = true;
+window.checkFileInfoOverride[['DownloadAsPostMessage']] = true;
+// The first item in the frameAncestors must be the target domain where this application will be embedded.
+window.parentFrameOrigin = window.frameAncestors.substring(
+    0,
+    (window.frameAncestors.indexOf(' ') > 0 ? window.frameAncestors.indexOf(' ') : window.frameAncestors.length)
+);
 
 // This is GLOBAL_JS:
 m4_syscmd([cat ]GLOBAL_JS)m4_dnl

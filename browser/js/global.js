@@ -42,7 +42,6 @@ window.concatByteArray = function(params) {
   return result;
 };
 // Setup parent-frame proxy socket communication.
-window.parentFrameOrigin = 'http://127.0.0.1:9981'; // FIXME frame ancestor? prod('https://nano.clarabot.com')
 window.parentFrameSocketNumber = 0;
 window.ParentFrameSocket = function(uri) {
 	var that = this;
