@@ -1,5 +1,11 @@
 /* -*- js-indent-level: 8 -*- */
 /*
+ * Copyright the Collabora Online contributors.
+ *
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
+/*
  * L.Control.JSDialogBuilder used for building the native HTML components
  * from the JSON description provided by the server.
  */
@@ -52,6 +58,10 @@ L.Control.JSDialogBuilder = L.Control.extend({
 
 	_currentDepth: 0,
 
+	rendersCache: {
+		fontnamecombobox: { persistent: true, images: [] }
+	}, // eg. custom renders for combobox entries
+
 	setWindowId: function (id) {
 		this.windowId = id;
 	},
@@ -61,6 +71,7 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		this.wizard = options.mobileWizard;
 		this.map = options.map;
 		this.windowId = options.windowId;
+		this.dialogId = null;
 		this.callback = options.callback ? options.callback : this._defaultCallbackHandler;
 
 		this._colorPickers = [];
@@ -71,6 +82,7 @@ L.Control.JSDialogBuilder = L.Control.extend({
 
 		this._controlHandlers = {};
 		this._controlHandlers['radiobutton'] = this._radiobuttonControl;
+		this._controlHandlers['progressbar'] = JSDialog.progressbar;
 		this._controlHandlers['checkbox'] = this._checkboxControl;
 		this._controlHandlers['basespinfield'] = this.baseSpinField;
 		this._controlHandlers['spinfield'] = this._spinfieldControl;
@@ -83,8 +95,8 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		this._controlHandlers['okbutton'] = this._pushbuttonControl;
 		this._controlHandlers['helpbutton'] = this._pushbuttonControl;
 		this._controlHandlers['cancelbutton'] = this._pushbuttonControl;
-		this._controlHandlers['combobox'] = this._comboboxControl;
-		this._controlHandlers['comboboxentry'] = this._comboboxEntry;
+		this._controlHandlers['combobox'] = JSDialog.combobox;
+		this._controlHandlers['comboboxentry'] = JSDialog.comboboxEntry;
 		this._controlHandlers['listbox'] = this._listboxControl;
 		this._controlHandlers['valueset'] = this._valuesetControl;
 		this._controlHandlers['fixedtext'] = this._fixedtextControl;
@@ -93,7 +105,7 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		this._controlHandlers['grid'] = this._gridHandler;
 		this._controlHandlers['alignment'] = this._alignmentHandler;
 		this._controlHandlers['buttonbox'] = this._buttonBox;
-		this._controlHandlers['frame'] = this._frameHandler;
+		this._controlHandlers['frame'] = JSDialog.frame;
 		this._controlHandlers['deck'] = this._deckHandler;
 		this._controlHandlers['panel'] = this._panelHandler;
 		this._controlHandlers['calcfuncpanel'] = this._calcFuncListPanelHandler;
@@ -112,9 +124,8 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		this._controlHandlers['colorsample'] = this._colorSampleControl;
 		this._controlHandlers['divcontainer'] = this._divContainerHandler;
 		this._controlHandlers['colorlistbox'] = this._colorControl;
-		this._controlHandlers['borderstyle'] = this._borderControl;
 		this._controlHandlers['treelistbox'] = JSDialog.treeView;
-		this._controlHandlers['iconview'] = this._iconViewControl;
+		this._controlHandlers['iconview'] = JSDialog.iconView;
 		this._controlHandlers['drawingarea'] = JSDialog.drawingArea;
 		this._controlHandlers['rootcomment'] = this._rootCommentControl;
 		this._controlHandlers['comment'] = this._commentControl;
@@ -127,6 +138,7 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		this._controlHandlers['scrollwindow'] = JSDialog.scrolledWindow;
 		this._controlHandlers['customtoolitem'] = this._mapDispatchToolItem;
 		this._controlHandlers['bigcustomtoolitem'] = this._mapBigDispatchToolItem;
+		this._controlHandlers['calendar'] = JSDialog.calendar;
 
 		this._controlHandlers['mainmenu'] = this._containerHandler;
 		this._controlHandlers['submenu'] = this._subMenuHandler;
@@ -172,19 +184,23 @@ L.Control.JSDialogBuilder = L.Control.extend({
 			{text: _UNO('.uno:FourierAnalysisDialog', 'spreadsheet'), uno: '.uno:FourierAnalysisDialog'}
 		];
 		this._menus['FormatSparklineMenu'] = [
-			{text: _UNO('.uno:InsertSparkline', 'spreadsheet'), uno: '.uno:InsertSparkline'},
-			{text: _UNO('.uno:DeleteSparkline', 'spreadsheet'), uno: '.uno:DeleteSparkline'},
-			{text: _UNO('.uno:DeleteSparklineGroup', 'spreadsheet'), uno: '.uno:DeleteSparklineGroup'},
-			{text: _UNO('.uno:EditSparklineGroup', 'spreadsheet'), uno: '.uno:EditSparklineGroup'},
-			{text: _UNO('.uno:EditSparkline', 'spreadsheet'), uno: '.uno:EditSparkline'},
-			{text: _UNO('.uno:GroupSparklines', 'spreadsheet'), uno: '.uno:GroupSparklines'},
-			{text: _UNO('.uno:UngroupSparklines', 'spreadsheet'), uno: '.uno:UngroupSparklines'}
+			{text: _UNO('.uno:InsertSparkline', 'spreadsheet'), uno: 'InsertSparkline'},
+			{text: _UNO('.uno:DeleteSparkline', 'spreadsheet'), uno: 'DeleteSparkline'},
+			{text: _UNO('.uno:DeleteSparklineGroup', 'spreadsheet'), uno: 'DeleteSparklineGroup'},
+			{text: _UNO('.uno:EditSparklineGroup', 'spreadsheet'), uno: 'EditSparklineGroup'},
+			{text: _UNO('.uno:EditSparkline', 'spreadsheet'), uno: 'EditSparkline'},
+			{text: _UNO('.uno:GroupSparklines', 'spreadsheet'), uno: 'GroupSparklines'},
+			{text: _UNO('.uno:UngroupSparklines', 'spreadsheet'), uno: 'UngroupSparklines'}
 		];
 		this._menus['MenuPrintRanges'] = [
 			{text: _UNO('.uno:DefinePrintArea', 'spreadsheet'), uno: '.uno:DefinePrintArea'},
 			{text: _UNO('.uno:AddPrintArea', 'spreadsheet'), uno: '.uno:AddPrintArea'},
 			{text: _UNO('.uno:EditPrintArea', 'spreadsheet'), uno: '.uno:EditPrintArea'},
 			{text: _UNO('.uno:DeletePrintArea', 'spreadsheet'), uno: '.uno:DeletePrintArea'}
+		];
+		this._menus['Print'] = [
+			{text: _('Active sheet'), id: 'print-active-sheet', type: 'action'},
+			{text: _('All Sheets'), id: 'print-all-sheets', type: 'action'},
 		];
 		this._menus['MenuRowHeight'] = [
 			{text: _UNO('.uno:RowHeight', 'spreadsheet'), uno: '.uno:RowHeight'},
@@ -270,8 +286,27 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		}
 	},
 
+	reportValidity: function() {
+		var isValid = true;
+		if (!this._container)
+			return isValid;
+
+		var inputs = this._container.querySelectorAll('input[type="number"]');
+		for (var item = 0; item < inputs.length; item++) {
+			isValid = inputs[item].reportValidity();
+			if (!isValid)
+				break;
+		}
+
+		return isValid;
+	},
+
 	isContainerType: function(type) {
 		return this._nonContainerType.indexOf(type) < 0;
+	},
+
+	setContainer: function(container) {
+		this._container = container;
 	},
 
 	_clearColorPickers: function() {
@@ -323,8 +358,10 @@ L.Control.JSDialogBuilder = L.Control.extend({
 
 	// by default send new state to the core
 	_defaultCallbackHandler: function(objectType, eventType, object, data, builder) {
-
 		if (builder.map.uiManager.isUIBlocked())
+			return;
+
+		if (objectType === 'responsebutton' && data === 1 && !builder.reportValidity())
 			return;
 
 		window.app.console.debug('control: \'' + objectType + '\' id:\'' + object.id + '\' event: \'' + eventType + '\' state: \'' + data + '\'');
@@ -346,7 +383,7 @@ L.Control.JSDialogBuilder = L.Control.extend({
 				 (objectType === 'responsebutton' && (data == 0 || data == 7)))) {
 				window.onClose();
 			}
-			data = typeof data === 'string' ? data.replace('"', '\\"') : data;
+			data = typeof data === 'string' ? data.replaceAll('"', '\\"') : data;
 			var windowId = builder.windowId !== null && builder.windowId !== undefined ? builder.windowId :
 				(window.mobileDialogId !== undefined ? window.mobileDialogId :
 					(window.sidebarId !== undefined ? window.sidebarId : -1));
@@ -381,19 +418,16 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		if (data.labelledBy)
 			spinfield.setAttribute('aria-labelledby', data.labelledBy);
 
-		if (data.unit) {
+		if (data.unit && data.unit !== ':') {
 			var unit = L.DomUtil.create('span', builder.options.cssClass + ' spinfieldunit', div);
 			unit.textContent = builder._unitToVisibleString(data.unit);
 		}
 
 		var getPrecision = function (data) {
 			data = Math.abs(data);
-			var counter = 1;
-
-			while (Math.floor(data * counter) < (data * counter))
-				counter *= 10;
-
-			return 1/counter;
+			var str = '' + data;
+			var dot = str.indexOf('.');
+			return dot > 0 ? 1 / Math.pow(10, str.length - dot - 1) : 1;
 		};
 
 		if (data.min != undefined)
@@ -406,10 +440,11 @@ L.Control.JSDialogBuilder = L.Control.extend({
 			// we don't want to show error popups due to browser step validation
 			// so be sure all the values will be acceptted, check only precision
 			var step = getPrecision(data.step);
+			var value = data.value ? getPrecision(data.value) : 1;
 			var minStep = getPrecision(data.min);
 			var maxStep = getPrecision(data.max);
 
-			step = Math.min(step, minStep, maxStep);
+			step = Math.min(step, value, minStep, maxStep);
 
 			$(spinfield).attr('step', step);
 		}
@@ -426,7 +461,8 @@ L.Control.JSDialogBuilder = L.Control.extend({
 
 		spinfield.addEventListener('change', function() {
 			var attrdisabled = $(spinfield).attr('disabled');
-			if (attrdisabled !== 'disabled') {
+			var isValid = this.checkValidity();
+			if (attrdisabled !== 'disabled' && isValid) {
 				if (customCallback)
 					customCallback('spinfield', 'change', div, this.value, builder);
 				else
@@ -439,6 +475,9 @@ L.Control.JSDialogBuilder = L.Control.extend({
 
 	listenNumericChanges: function (data, builder, controls, customCallback) {
 		controls.spinfield.addEventListener('change', function() {
+			if (!this.checkValidity())
+				return;
+
 			if (customCallback)
 				customCallback();
 			else
@@ -469,7 +508,7 @@ L.Control.JSDialogBuilder = L.Control.extend({
 	},
 
 	_stressAccessKey: function(element, accessKey) {
-		if (!accessKey)
+		if (!accessKey || window.mode.isMobile())
 			return;
 
 		var text = element.textContent;
@@ -482,7 +521,7 @@ L.Control.JSDialogBuilder = L.Control.extend({
 
 	_setAccessKey: function(element, key) {
 		if (key)
-				element.accessKey = key;
+			element.accessKey = key;
 	},
 
 	_getAccessKeyFromText: function(text) {
@@ -501,6 +540,8 @@ L.Control.JSDialogBuilder = L.Control.extend({
 			return '';
 		if (text.endsWith('...'))
 			text = text.slice(0, -3);
+		if (text.endsWith('…'))
+			text = text.slice(0, -1);
 		return text.replace('~', '');
 	},
 
@@ -1028,38 +1069,6 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		}
 	},
 
-	_frameHandler: function(parentContainer, data, builder) {
-		if (data.children.length > 1) {
-			var container = L.DomUtil.create('div', 'ui-frame-container ' + builder.options.cssClass, parentContainer);
-			container.id = data.id;
-
-			var frame = L.DomUtil.create('div', 'ui-frame ' + builder.options.cssClass, container);
-			frame.id = data.id + '-frame';
-			var label = L.DomUtil.create('label', 'ui-frame-label ' + builder.options.cssClass, frame);
-			label.innerText = builder._cleanText(data.children[0].text);
-			label.id = data.children[0].id;
-			if (data.children[0].visible === false)
-				L.DomUtil.addClass(label, 'hidden');
-			builder.postProcess(frame, data.children[0]);
-
-			var frameChildren = L.DomUtil.create('div', 'ui-expander-content ' + builder.options.cssClass, container);
-			frameChildren.id = data.id + '-content';
-			label.htmlFor = frameChildren.id;
-			$(frameChildren).addClass('expanded');
-
-			var children = [];
-			for (var i = 1; i < data.children.length; i++) {
-				children.push(data.children[i]);
-			}
-
-			builder.build(frameChildren, children);
-		} else {
-			return builder._containerHandler(parentContainer, data, builder);
-		}
-
-		return false;
-	},
-
 	_deckHandler: function(parentContainer, data, builder) {
 		var deck = L.DomUtil.create('div', 'deck ' + builder.options.cssClass, parentContainer);
 		deck.id = data.id;
@@ -1130,18 +1139,18 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		if (data.tabs) {
 			var tabs = 0;
 			for (var tabIdx = 0; data.children && tabIdx < data.children.length; tabIdx++) {
-				if (data.children[tabIdx].type === 'tabpage')
+				if (data.children[tabIdx].type === 'tabpage' || data.vertical)
 					tabs++;
 			}
 			var isMultiTabJSON = tabs > 1;
 
-			var tabWidgetRootContainer = L.DomUtil.create('div', 'ui-tabs-root ' + builder.options.cssClass + ' ui-widget', parentContainer);
+			var tabWidgetRootContainer = L.DomUtil.create('div', 'ui-tabs-root ' + builder.options.cssClass, parentContainer);
 			tabWidgetRootContainer.id = data.id;
 
 			var tabsContainer = L.DomUtil.create('div', 'ui-tabs ' + builder.options.cssClass + ' ui-widget', builder.options.useSetTabs ? undefined : tabWidgetRootContainer);
 			tabsContainer.setAttribute('role', 'tablist');
 
-			var contentsContainer = L.DomUtil.create('div', 'ui-tabs-content ' + builder.options.cssClass + ' ui-widget', tabWidgetRootContainer);
+			var contentsContainer = L.DomUtil.create('div', 'ui-tabs-content ' + builder.options.cssClass, tabWidgetRootContainer);
 
 			var tabs = [];
 			var contentDivs = [];
@@ -1153,10 +1162,11 @@ L.Control.JSDialogBuilder = L.Control.extend({
 				var title = builder._cleanText(item.text);
 
 				var tab = L.DomUtil.create('button', 'ui-tab ' + builder.options.cssClass, tabsContainer);
-				tab.id = item.name + '-tab-label';
-				tab.number = item.id - 1;
+				// avoid duplicated ids: we receive plain number from core, append prefix
+				tab.id = Number.isInteger(parseInt(item.id)) ? data.id + '-' + item.id : item.id;
 				tab.textContent = title;
 				tab.setAttribute('role', 'tab');
+				tab.setAttribute('aria-label', title);
 				builder._setAccessKey(tab, builder._getAccessKeyFromText(item.text));
 				builder._stressAccessKey(tab, tab.accessKey);
 
@@ -1202,8 +1212,7 @@ L.Control.JSDialogBuilder = L.Control.extend({
 				tabs.forEach(function (tab, index) {
 					tab.addEventListener('click', function(event) {
 						builder._createTabClick(builder, index, tabs, contentDivs, tabIds)(event);
-						if (data.tabs[index].id - 1 >= 0)
-							builder.callback('tabcontrol', 'selecttab', tabWidgetRootContainer, index, builder);
+						builder.callback('tabcontrol', 'selecttab', tabWidgetRootContainer, index, builder);
 					});
 				});
 
@@ -1228,17 +1237,81 @@ L.Control.JSDialogBuilder = L.Control.extend({
 				};
 
 				var moveFocusToPreviousTab = function(tab) {
-					if (tab === tabs[0])
+					if (tab === tabs[0]) {
+						tabs[tabs.length - 1].click();
 						tabs[tabs.length - 1].focus();
-					else
-						findNextVisibleTab(tab, true).focus();
+					}
+					else {
+						var nextTab = findNextVisibleTab(tab, true);
+						nextTab.click();
+						nextTab.focus(); // We add this or document gets the focus.
+					}
 				};
 
 				var moveFocusToNextTab = function(tab) {
-					if (tab === tabs[tabs.length - 1])
+					if (tab === tabs[tabs.length - 1]) {
+						tabs[0].click();
 						tabs[0].focus();
-					else
-						findNextVisibleTab(tab, false).focus();
+					}
+					else {
+						var nextTab = findNextVisibleTab(tab, false);
+						nextTab.click();
+						nextTab.focus(); // We add this or document gets the focus.
+					}
+				};
+
+				var moveFocusIntoTabPage = function(tab) {
+					var tabIdx = tabs.indexOf(tab);
+					var currentElement = contentDivs[tabIdx];
+
+					function findFirstFocusableElement(currentNode)
+					{
+						var currentChildNodes = currentNode.childNodes;
+
+						if (currentChildNodes.length <= 0) {
+							return null;
+						}
+
+						for (var childIndex = 0; childIndex < currentChildNodes.length; childIndex++) {
+							var currentChildNode = currentChildNodes[childIndex];
+
+							if (currentChildNode.tabIndex === undefined) {
+								return null;
+							}
+							if (currentChildNode.tabIndex === -1) {
+								var firstFocusableElement = findFirstFocusableElement(currentChildNode);
+
+								if (firstFocusableElement !== null) {
+									return firstFocusableElement;
+								}
+							}
+							else
+							{
+								var classListContainsInvalidClass = false;
+								if (currentChildNode.classList !== undefined) {
+									classListContainsInvalidClass = currentChildNode.classList.contains('hidden') ||
+																	currentChildNode.classList.contains('jsdialog-begin-marker') ||
+																	currentChildNode.classList.contains('jsdialog-end-marker');
+								}
+
+								if (!currentChildNode.disabled && !currentChildNode.hidden && !classListContainsInvalidClass) {
+									var firstFocusableChild = findFirstFocusableElement(currentChildNode);
+									if (firstFocusableChild === null) {
+										return currentChildNode;
+									}
+									else {
+										return firstFocusableChild;
+									}
+								}
+							}
+						}
+
+						return null;
+					}
+
+					var firstFocusableElement = findFirstFocusableElement(currentElement);
+
+					firstFocusableElement.focus();
 				};
 
 				// We are adding this to distinguish "enter" key from real click events.
@@ -1254,6 +1327,10 @@ L.Control.JSDialogBuilder = L.Control.extend({
 
 							case 'ArrowRight':
 								moveFocusToNextTab(currentTab);
+								break;
+
+							case 'ArrowDown':
+								moveFocusIntoTabPage(currentTab);
 								break;
 
 							case 'Home':
@@ -1296,27 +1373,39 @@ L.Control.JSDialogBuilder = L.Control.extend({
 			for (var tabIdx = 0; tabIdx < data.children.length; tabIdx++) {
 				var tab = data.children[tabIdx];
 
-				if (tab.type !== 'tabpage')
+				if (tab.type !== 'tabpage' && !data.vertical)
 					continue;
 
 				builder.build(contentDivs[tabId], [tab], false, false);
 				tabId++;
 			}
-
-			return false;
 		} else {
 			for (var tabIdx = 0; tabIdx < data.children.length; tabIdx++) {
 				var tab = data.children[tabIdx];
 
-				if (tab.type !== 'tabpage')
+				if (tab.type !== 'tabpage' && !data.vertical)
 					continue;
 
 				builder.build(contentDivs[singleTabId], [tab], false, false);
 				break;
 			}
-
-			return false;
 		}
+
+		function addKeydownEvents(element) {
+			element.addEventListener('keydown', function(e) {
+				if (e.key === 'ArrowUp') {
+					var tabIdx = tabIds.indexOf(e.currentTarget.id);
+					tabs[tabIdx].focus();
+				}
+			});
+		}
+
+		contentDivs.forEach(function(tabPage)
+		{
+			addKeydownEvents(tabPage);
+		});
+
+		return false;
 	},
 
 	_singlePanelHandler: function(parentContainer, data, builder) {
@@ -1565,6 +1654,13 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		builder.listenNumericChanges(data, builder, controls, customCallback);
 
 		value = parseFloat(data.value);
+
+		// time formatter or empty field
+		if (data.unit === ':' || (!data.unit && !data.text)) {
+			controls.spinfield.type = undefined;
+			value = data.text;
+		}
+
 		$(controls.spinfield).val(value);
 
 		return false;
@@ -1682,90 +1778,6 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		}
 	},
 
-	_explorableEditControl: function(parentContainer, data, builder) {
-		var sectionTitle = L.DomUtil.create('div', 'ui-header level-' + builder._currentDepth + ' ' + builder.options.cssClass + ' ui-widget', parentContainer);
-		$(sectionTitle).css('justify-content', 'space-between');
-		if (data && data.id)
-			sectionTitle.id = data.id;
-
-		var leftDiv = L.DomUtil.create('div', 'ui-header-left combobox', sectionTitle);
-
-		var editCallback = function(value) {
-			builder.callback('combobox', 'change', data, value, builder);
-		};
-		builder._controlHandlers['edit'](leftDiv, data, builder, editCallback);
-
-		var rightDiv = L.DomUtil.create('div', 'ui-header-right', sectionTitle);
-
-		var arrowSpan = L.DomUtil.create('span', 'sub-menu-arrow', rightDiv);
-		arrowSpan.textContent = '>';
-
-		var contentDiv = L.DomUtil.create('div', 'ui-content level-' + builder._currentDepth + ' ' + builder.options.cssClass, parentContainer);
-		contentDiv.title = data.text;
-
-		var entries = [];
-		if (data.entries) {
-			for (var index in data.entries) {
-				var style = 'ui-combobox-text';
-				if ((data.selectedEntries && index == data.selectedEntries[0])
-					|| data.entries[index] == data.text) {
-					style += ' selected';
-				}
-
-				var entry = { type: 'comboboxentry', text: data.entries[index], pos: index, parent: data, style: style };
-				entries.push(entry);
-			}
-		}
-
-		var contentNode = {type: 'container', children: entries};
-
-		builder._currentDepth++;
-		builder.build(contentDiv, [contentNode]);
-		builder._currentDepth--;
-
-		if (!data.nosubmenu)
-		{
-			$(contentDiv).hide();
-			if (builder.wizard) {
-				$(sectionTitle).click(function(event, data) {
-					builder.wizard.goLevelDown(contentDiv, data);
-					if (contentNode && contentNode.onshow)
-						contentNode.onshow();
-				});
-			} else {
-				window.app.console.debug('Builder used outside of mobile wizard: please implement the click handler');
-			}
-		}
-		else
-			$(sectionTitle).hide();
-	},
-
-	// todo: implement real combobox with entry field and listbox at the same time
-	_comboboxControl: function(parentContainer, data, builder) {
-		if (data.id === 'searchterm' ||
-			data.id === 'replaceterm') {
-			// Replace combobox with edit in mobile find & replace dialog
-			var callback = function(value) {
-				builder.callback('combobox', 'change', data, value, builder);
-			};
-
-			builder._controlHandlers['edit'](parentContainer, data, builder, callback);
-		} else if (data.id === 'applystyle' ||
-			data.id === 'fontnamecombobox' ||
-			data.id === 'fontsizecombobox' ||
-			data.id === 'fontsize' ||
-			data.id === 'FontBox' ||
-			data.id === 'rotation' ||
-			data.id === 'LB_ANGLE' ||
-			data.id === 'LB_DISTANCE' ||
-			!window.mode.isMobile()) {
-			builder._listboxControl(parentContainer, data, builder);
-		} else if (window.mode.isMobile())
-			builder._explorableEditControl(parentContainer, data, builder);
-		else
-			window.app.console.warn('Unsupported combobox control!');
-	},
-
 	_listboxControl: function(parentContainer, data, builder) {
 		var title = data.text;
 		var selectedEntryIsString = false;
@@ -1831,79 +1843,6 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		return false;
 	},
 
-	_iconViewEntry: function (parentContainer, parentData, entry, builder) {
-		var disabled = parentData.enabled === 'false' || parentData.enabled === false;
-
-		if (entry.separator && (entry.separator === 'true' || entry.separator === true)) {
-			L.DomUtil.create('hr', builder.options.cssClass + ' ui-iconview-separator', parentContainer);
-			return;
-		}
-
-		var entryContainer = L.DomUtil.create('div', builder.options.cssClass + ' ui-iconview-entry', parentContainer);
-		if (entry.selected && (entry.selected === 'true' || entry.selected === true))
-			$(entryContainer).addClass('selected');
-
-		var icon = L.DomUtil.create('div', builder.options.cssClass + ' ui-iconview-icon', entryContainer);
-		var img = L.DomUtil.create('img', builder.options.cssClass, icon);
-		if (entry.image)
-			img.src = entry.image;
-		img.alt = entry.text;
-		if (entry.tooltip)
-			img.title = entry.tooltip;
-		else
-			img.title = entry.text;
-
-		if (!disabled) {
-			var singleClick = parentData.singleclickactivate === 'true' || parentData.singleclickactivate === true;
-			$(entryContainer).click(function() {
-				$('#' + parentData.id + ' .ui-treeview-entry').removeClass('selected');
-				builder.callback('iconview', 'select', parentData, entry.row, builder);
-				if (singleClick) {
-					builder.callback('iconview', 'activate', parentData, entry.row, builder);
-				}
-			});
-			if (!singleClick) {
-				$(entryContainer).dblclick(function() {
-					$('#' + parentData.id + ' .ui-treeview-entry').removeClass('selected');
-					builder.callback('iconview', 'activate', parentData, entry.row, builder);
-				});
-			}
-			builder._preventDocumentLosingFocusOnClick(entryContainer);
-		}
-	},
-
-	_scrollIntoViewBlockOption: function(option) {
-		if (option === 'nearest' || option === 'center') {
-			// compatibility with older firefox
-			var match = window.navigator.userAgent.match(/Firefox\/([0-9]+)\./);
-			var firefoxVer = match ? parseInt(match[1]) : 58;
-			var blockOption = firefoxVer >= 58 ? option : 'start';
-			return blockOption;
-		}
-
-		return option;
-	},
-
-	_iconViewControl: function (parentContainer, data, builder) {
-		var container = L.DomUtil.create('div', builder.options.cssClass + ' ui-iconview', parentContainer);
-		container.id = data.id;
-
-		var disabled = data.enabled === 'false' || data.enabled === false;
-		if (disabled)
-			L.DomUtil.addClass(container, 'disabled');
-
-		for (var i in data.entries) {
-			builder._iconViewEntry(container, data, data.entries[i], builder);
-		}
-
-		var firstSelected = $(container).children('.selected').get(0);
-		var blockOption = builder._scrollIntoViewBlockOption('nearest');
-		if (firstSelected)
-			firstSelected.scrollIntoView({behavior: 'smooth', block: blockOption, inline: 'nearest'});
-
-		return false;
-	},
-
 	_valuesetControl: function (parentContainer, data, builder) {
 		var elem;
 		var image;
@@ -1937,23 +1876,6 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		}
 
 		return false;
-	},
-
-	_comboboxEntry: function(parentContainer, data, builder) {
-		var comboboxEntry = L.DomUtil.create('p', builder.options.cssClass, parentContainer);
-		comboboxEntry.textContent = builder._cleanText(data.text);
-
-		comboboxEntry.parent = data.parent;
-
-		if (data.style && data.style.length)
-			L.DomUtil.addClass(comboboxEntry, data.style);
-
-		$(comboboxEntry).click(function () {
-			builder.refreshSidebar = true;
-			if (builder.wizard)
-				builder.wizard.goLevelUp();
-			builder.callback('combobox', 'selected', comboboxEntry.parent, data.pos + ';' + comboboxEntry.textContent, builder);
-		});
 	},
 
 	_fixedtextControl: function(parentContainer, data, builder) {
@@ -1998,18 +1920,17 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		return false;
 	},
 
-	_separatorControl: function(parentContainer, data) {
-		// don't create new control, style current parent
-
-		var target = parentContainer.lastChild;
-		if (!target)
-			target = parentContainer;
-
-		L.DomUtil.addClass(target, 'ui-separator');
+	_separatorControl: function(parentContainer, data, builder) {
 		if (data.orientation && data.orientation === 'vertical') {
+			// don't create new control, style current parent
+			// TODO: create something...
+			var target = parentContainer.lastChild;
+			if (!target)
+				target = parentContainer;
+			L.DomUtil.addClass(target, 'ui-separator');
 			L.DomUtil.addClass(target, 'vertical');
 		} else {
-			L.DomUtil.addClass(target, 'horizontal');
+			L.DomUtil.create('hr', builder.options.cssClass + ' ui-separator horizontal', parentContainer);
 		}
 
 		return false;
@@ -2176,7 +2097,7 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		}
 
 		$(container).find('.cool-annotation')[0].addEventListener('click', function() {
-			app.sectionContainer.getSectionWithName(L.CSections.CommentList.name).hightlightComment(data.annotation);
+			app.sectionContainer.getSectionWithName(L.CSections.CommentList.name).highlightComment(data.annotation);
 		});
 		return false;
 	},
@@ -2221,6 +2142,8 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		}
 
 		var iconURLAliases = {
+			'file-saveas': 'saveas',
+			'home-search': 'recsearch',
 			'addmb-menu': 'ok',
 			'closetablet': 'view',
 			'defineprintarea': 'menuprintranges',
@@ -2384,6 +2307,7 @@ L.Control.JSDialogBuilder = L.Control.extend({
 			// The fix for issues #6103 and #6104 changes the name of these
 			// icons so map the new names to the old names.
 			'downloadas-pdf': 'exportpdf',
+			'downloadas-direct-pdf': 'exportdirectpdf',
 			'downloadas-epub': 'exportepub',
 		};
 		if (iconURLAliases[cleanName]) {
@@ -2440,6 +2364,8 @@ L.Control.JSDialogBuilder = L.Control.extend({
 
 		controls['container'] = div;
 		div.tabIndex = -1;
+		if (data.class)
+			div.classList.add(data.class);
 
 		var isRealUnoCommand = true;
 		var hasPopUp = false;
@@ -2450,19 +2376,18 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		}
 
 		if (data.command || data.postmessage === true) {
-			var id = data.id ? data.id : (data.command && data.command !== '') ? data.command : data.text;
+			var id = data.id ? data.id : (data.command && data.command !== '') ? data.command.replace('.uno:', '') : data.text;
 			var isUnoCommand = data.command && data.command.indexOf('.uno:') >= 0;
-			if (isUnoCommand)
-				id = encodeURIComponent(data.command.substr('.uno:'.length));
-			else
-				isRealUnoCommand = false;
+
+			isRealUnoCommand = isUnoCommand;
 
 			if (id)
 				id.replace(/\%/g, '').replace(/\./g, '-').replace(' ', '');
 			else
 				console.warn('_unoToolButton: no id provided');
 
-			L.DomUtil.addClass(div, 'uno' + id);
+			if (data.command)
+				L.DomUtil.addClass(div, data.command.replace(':', '').replace('.', ''));
 
 			if (isRealUnoCommand)
 				id = builder._makeIdUnique(id);
@@ -2470,26 +2395,37 @@ L.Control.JSDialogBuilder = L.Control.extend({
 			div.id = id;
 			data.id = id; // change in input data for postprocess
 
-			var icon = data.icon ? data.icon : builder._createIconURL(data.command);
-			var buttonId = id + 'img';
+			var buttonId = id + '-button';
 
 			button = L.DomUtil.create('button', 'ui-content unobutton', div);
 			button.id = buttonId;
-			button.setAttribute('alt', id);
-			builder._setAccessKey(button, builder._getAccessKeyFromText(data.text));
+			if (!data.accessKey)
+				builder._setAccessKey(button, builder._getAccessKeyFromText(data.text));
+			else
+				button.accessKey = data.accessKey;
+
 			if (hasPopUp)
 				button.setAttribute('aria-haspopup', true);
 
+			var setupIcon = function () {
+				var icon = data.icon ? data.icon : builder._createIconURL(data.command);
+				var imagePath = (data.image && !isUnoCommand) ? data.image : icon;
+				buttonImage.src = imagePath;
+				L.LOUtil.checkIfImageExists(buttonImage);
+			};
 
-			var imagePath = (data.image && !isUnoCommand) ? data.image : icon;
 			var buttonImage = L.DomUtil.create('img', '', button);
-			buttonImage.src = imagePath;
+			setupIcon();
+
+			builder.map.on('themechanged', setupIcon);
 
 			controls['button'] = button;
 			if (builder.options.noLabelsForUnoButtons !== true) {
 				var label = L.DomUtil.create('label', 'ui-content unolabel', button);
 				label.htmlFor = buttonId;
 				label.textContent = builder._cleanText(data.text);
+				button.setAttribute('alt', label.textContent);
+				buttonImage.alt = label.textContent;
 				builder._stressAccessKey(label, button.accessKey);
 				controls['label'] = label;
 				$(div).addClass('has-label');
@@ -2497,6 +2433,8 @@ L.Control.JSDialogBuilder = L.Control.extend({
 				$(div).addClass('no-label');
 			} else {
 				div.title = data.text;
+				button.setAttribute('alt', data.text);
+				buttonImage.alt = data.text;
 				builder.map.uiManager.enableTooltip(div);
 				$(div).addClass('no-label');
 			}
@@ -2561,8 +2499,6 @@ L.Control.JSDialogBuilder = L.Control.extend({
 				$(button).addClass('selected');
 				$(div).addClass('selected');
 			}
-			L.LOUtil.checkIfImageExists(buttonImage);
-
 		} else {
 			button = L.DomUtil.create('label', 'ui-content unolabel', div);
 			button.textContent = builder._cleanText(data.text);
@@ -2608,6 +2544,14 @@ L.Control.JSDialogBuilder = L.Control.extend({
 			}
 			e.preventDefault();
 			e.stopPropagation();
+		});
+
+		div.addEventListener('keydown', function(e) {
+			switch (e.key) {
+			case 'Escape':
+				builder.map.focus();
+				break;
+			}
 		});
 
 		builder._preventDocumentLosingFocusOnClick(div);
@@ -2666,7 +2610,8 @@ L.Control.JSDialogBuilder = L.Control.extend({
 
 		$(control.container).unbind('click.toolbutton');
 		if (!builder.map.isLockedItem(data)) {
-			$(control.container).click(function () {
+			$(control.container).click(function (e) {
+				e.preventDefault();
 				builder.map.dispatch(data.command);
 			});
 		}
@@ -2737,7 +2682,7 @@ L.Control.JSDialogBuilder = L.Control.extend({
 			return parseInt('0x' + color);
 	},
 
-	_sendColorCommand: function(builder, data, color) {
+	_sendColorCommand: function(builder, data, color, themeData) {
 		var gradientItem;
 
 		// complex color properties
@@ -2775,12 +2720,23 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		}
 
 		var params = {};
-		params[data.id] = {
+		var colorParameterID = data.command.replace('.uno:', '') + '.Color';
+		var themeParameterID = data.command.replace('.uno:', '') + '.ComplexColorJSON';
+
+		params[colorParameterID] = {
 			type : 'long',
 			value : builder.parseHexColor(color)
 		};
 
-		builder.map['stateChangeHandler'].setItemValue(data.command, params[data.id].value);
+		if (themeData != null)
+		{
+			params[themeParameterID] = {
+				type : 'string',
+				value : themeData
+			};
+		}
+
+		builder.map['stateChangeHandler'].setItemValue(data.command, params[colorParameterID].value);
 		builder.map.sendUnoCommand(data.command, params);
 	},
 
@@ -2815,98 +2771,6 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		return selectedColor;
 	},
 
-	_getCurrentBorderNumber: function(builder) {
-		var outer = builder.map['stateChangeHandler'].getItemValue('.uno:BorderOuter');
-		var inner = builder.map['stateChangeHandler'].getItemValue('.uno:BorderInner');
-
-		if (!outer || !inner)
-			return 0;
-
-		var left = outer.left === 'true';
-		var right = outer.right === 'true';
-		var bottom = outer.bottom === 'true';
-		var top = outer.top === 'true';
-		var horiz = inner.horizontal === 'true';
-		var vert = inner.vertical === 'true';
-
-		if (left && !right && !bottom && !top && !horiz && !vert) {
-			return 2;
-		} else if (!left && right && !bottom && !top && !horiz && !vert) {
-			return 3;
-		} else if (left && right && !bottom && !top && !horiz && !vert) {
-			return 4;
-		} else if (!left && !right && !bottom && top && !horiz && !vert) {
-			return 5;
-		} else if (!left && !right && bottom && !top && !horiz && !vert) {
-			return 6;
-		} else if (!left && !right && bottom && top && !horiz && !vert) {
-			return 7;
-		} else if (left && right && bottom && top && !horiz && !vert) {
-			return 8;
-		} else if (!left && !right && bottom && top && horiz && !vert) {
-			return 9;
-		} else if (left && right && bottom && top && horiz && !vert) {
-			return 10;
-		} else if (left && right && bottom && top && !horiz && vert) {
-			return 11;
-		} else if (left && right && bottom && top && horiz && vert) {
-			return 12;
-		}
-
-		return 1;
-	},
-
-	_borderControlItem: function(parentContainer, data, builder, i, selected) {
-		var button = null;
-
-		var div = this._createIdentifiable('div', 'ui-content unospan', parentContainer, data);
-
-		var buttonId = 'border-' + i;
-		button = L.DomUtil.create('img', 'ui-content borderbutton', div);
-		L.LOUtil.setImage(button, 'fr0' + i + '.svg', builder.map.getDocType());
-		button.id = buttonId;
-		if (selected)
-			$(button).addClass('selected');
-
-		$(div).click(function () {
-			var color = 0;
-			// Find our associated color picker
-			var item = L.LOUtil.findItemWithAttributeRecursive(data.parent, 'command', '.uno:FrameLineColor');
-			if (item)
-				color = builder._getCurrentColor(item, builder);
-			window.setBorderStyle(i, color);
-		});
-	},
-
-	_borderControl: function(parentContainer, data, builder) {
-		var bordercontrollabel = L.DomUtil.create('label', builder.options.cssClass + ' ui-text', parentContainer);
-		bordercontrollabel.textContent = _('Cell borders');
-		bordercontrollabel.id = data.id + 'label';
-		var current = builder._getCurrentBorderNumber(builder);
-		for (var i = 1; i < 13; ++i)
-			builder._borderControlItem(parentContainer, data, builder, i, i === current);
-
-		var updateFunction = function() {
-			var current = builder._getCurrentBorderNumber(builder);
-			for (var i = 1; i < 13; ++i) {
-				if (i !== current)
-					$('#border-' + i).removeClass('selected');
-				else
-					$('#border-' + i).addClass('selected');
-			}
-
-			if (builder.wizard && builder.wizard._refreshSidebar) {
-				builder.wizard._refreshSidebar(0);
-				builder.refreshSidebar = false;
-			}
-		};
-
-		builder.map.on('commandstatechanged', function(e) {
-			if (e.commandName === '.uno:BorderOuter' || e.commandName === '.uno:BorderInner')
-				updateFunction();
-		}, this);
-	},
-
 	_colorControl: function(parentContainer, data, builder) {
 		var commandOverride = data.command === '.uno:Color' && builder.map.getDocType() === 'text';
 		if (commandOverride)
@@ -2923,16 +2787,20 @@ L.Control.JSDialogBuilder = L.Control.extend({
 		if (data.command) {
 			var div = builder._createIdentifiable('div', 'unotoolbutton ' + builder.options.cssClass + ' ui-content unospan', parentContainer, data);
 
+			if (data.class)
+				div.classList.add(data.class);
+
 			var id = data.command.substr('.uno:'.length);
 			div.id = id;
+			div.tabIndex = -1;
 
 			div.title = data.text;
 			builder.map.uiManager.enableTooltip(div);
 
 			var icon = builder._createIconURL(data.command);
-			var buttonId = id + 'img';
-			var button = L.DomUtil.create('img', 'ui-content unobutton', div);
-			L.LOUtil.setImage(button, icon.split('/').pop(), builder.map.getDocType());
+			var buttonId = data.id ? data.id: id + '-button';
+			var button = L.DomUtil.create('button', 'ui-content unobutton', div);
+			button.style.background = 'url(' + L.LOUtil.getImageURL(icon.split('/').pop(), builder.map.getDocType()) + ')';
 			button.id = buttonId;
 			button.setAttribute('alt', id);
 
@@ -2976,16 +2844,18 @@ L.Control.JSDialogBuilder = L.Control.extend({
 				builder._sendColorCommand(builder, data, color);
 			};
 
-			$(button).click(applyFunction);
-			$(valueNode).click(applyFunction);
+			button.addEventListener('click', applyFunction);
+			valueNode.addEventListener('click', applyFunction);
 
-			$(arrowbackground).click(function() {
+			arrowbackground.tabIndex = 0;
+
+			var arrowEventHandler = function() {
 				if (!$(div).hasClass('disabled')) {
-					$(div).w2color({ color: builder._colorLastSelection[data.command], transparent: noColorControl }, function (color) {
+					$(div).w2color({ color: builder._colorLastSelection[data.command], transparent: noColorControl }, function (color, themeData) {
 						if (color != null) {
 							if (color) {
 								updateFunction('#' + color);
-								builder._sendColorCommand(builder, data, color);
+								builder._sendColorCommand(builder, data, color, themeData);
 							} else {
 								updateFunction('#FFFFFF');
 								builder._sendColorCommand(builder, data, 'transparent');
@@ -3015,7 +2885,29 @@ L.Control.JSDialogBuilder = L.Control.extend({
 						colorDiv.insertBefore(autoColorButton, colorDiv.firstChild);
 					}
 				}
+			};
+
+			arrowbackground.addEventListener('keydown', function(event) {
+				if (event.code === 'Enter' || event.ccode === 'Space') {
+					arrowEventHandler();
+					var w2uiElement = document.getElementById('w2ui-overlay');
+					w2uiElement.querySelector('.color-palette-selector').focus();
+					var tabCatcher = document.createElement('div');
+					tabCatcher.tabIndex = 0;
+					tabCatcher.onfocus = function() {
+						w2uiElement.querySelector('.color-palette-selector').focus();
+					};
+					w2uiElement.insertBefore(tabCatcher, w2uiElement.children[0]);
+
+					tabCatcher = document.createElement('div');
+					tabCatcher.tabIndex = 0;
+					tabCatcher.onfocus = function() {
+						w2uiElement.querySelector('.color-palette-selector').focus();
+					};
+					w2uiElement.appendChild(tabCatcher);
+				}
 			});
+			arrowbackground.addEventListener('click', arrowEventHandler);
 			builder._preventDocumentLosingFocusOnClick(div);
 		}
 
@@ -3171,18 +3063,10 @@ L.Control.JSDialogBuilder = L.Control.extend({
 			control.focus();
 			break;
 		case 'select':
-			$(control).children('.selected').removeClass('selected');
-
-			var pos = parseInt(data.position);
-			var entry = control.children.length > pos ? control.children[pos] : null;
-
-			if (entry) {
-				L.DomUtil.addClass(entry, 'selected');
-				var blockOption = this._scrollIntoViewBlockOption('nearest');
-				entry.scrollIntoView({behavior: 'smooth', block: blockOption, inline: 'nearest'});
-			} else if (pos != -1)
-				console.warn('not found entry: "' + pos + '" in: "' + data.control_id + '"');
-
+			if (typeof control.onSelect === 'function')
+				control.onSelect(parseInt(data.position));
+			else
+				window.app.console.warn('widget "' + data.control_id + '" doesn\'t support "select" action');
 			break;
 
 		case 'show':
@@ -3194,7 +3078,20 @@ L.Control.JSDialogBuilder = L.Control.extend({
 			$(control).addClass('hidden');
 			break;
 
+		case 'enable':
+			control.disabled = false;
+			break;
+
+		case 'disable':
+			control.disabled = true;
+			break;
+
 		case 'setText':
+			if (typeof control.onSetText === 'function') {
+				control.onSetText(data.text);
+				break;
+			}
+
 			// eg. in mobile wizard input is inside spin button div
 			var innerInput = control.querySelector('input');
 			if (innerInput)
@@ -3256,10 +3153,67 @@ L.Control.JSDialogBuilder = L.Control.extend({
 			}
 			break;
 
+		case 'rendered_combobox_entry':
+			if (!this.rendersCache[control.id])
+				this.rendersCache[control.id] = { persistent: false, images: [] };
+
+			this.rendersCache[control.id].images[data.pos] = data.image;
+
+			if (typeof control.updateRenders == 'function')
+				control.updateRenders(data.pos);
+
+			break;
+
 		default:
 			console.error('unknown action: "' + data.action_type + '"');
 			break;
 		}
+	},
+
+	_updateWidgetImpl: function (container, data, buildFunc) {
+		var control = container.querySelector('[id=\'' + data.id + '\']');
+		if (!control) {
+			window.app.console.warn('jsdialogupdate: not found control with id: "' + data.id + '"');
+			return;
+		}
+
+		var parent = control.parentNode;
+		if (!parent)
+			return;
+
+		var scrollTop = control.scrollTop;
+		var focusedElement = document.activeElement;
+		var focusedElementInDialog = focusedElement ? container.querySelector('[id=\'' + focusedElement.id + '\']') : null;
+		var focusedId = focusedElementInDialog ? focusedElementInDialog.id : null;
+
+		control.style.visibility = 'hidden';
+
+		var temporaryParent = L.DomUtil.create('div');
+		buildFunc.bind(this)(temporaryParent, [data], false);
+		parent.insertBefore(temporaryParent.firstChild, control.nextSibling);
+		var backupGridSpan = control.style.gridColumn;
+		L.DomUtil.remove(control);
+
+		var newControl = container.querySelector('[id=\'' + data.id + '\']');
+		if (newControl) {
+			newControl.scrollTop = scrollTop;
+			newControl.style.gridColumn = backupGridSpan;
+
+			// todo: is that needed? should be in widget impl?
+			if (data.has_default === true && (data.type === 'pushbutton' || data.type === 'okbutton'))
+				L.DomUtil.addClass(newControl, 'button-primary');
+		}
+
+		if (focusedId) {
+			var found = container.querySelector('[id=\'' + focusedId + '\']');
+			if (found)
+				found.focus();
+		}
+	},
+
+	// replaces widget in-place with new instance with updated data
+	updateWidget: function (container, data) {
+		this._updateWidgetImpl(container, data, this.build);
 	},
 
 	postProcess: function(parent, data) {
@@ -3306,6 +3260,31 @@ L.Control.JSDialogBuilder = L.Control.extend({
 			control.setAttribute('tabIndex', '0');
 	},
 
+	// some widgets we want to modify / change
+	isHyperlinkTarget: function (builder, data) {
+		return data.type === 'combobox' && (data.id === 'target' || data.id === 'receiver');
+	},
+
+	requiresOverwriting: function(builder, data) {
+		if (builder.isHyperlinkTarget(builder, data))
+			return true;
+
+		return false;
+	},
+
+	overwriteHandler: function(parentContainer, data, builder) {
+		if (builder.isHyperlinkTarget(builder, data)) {
+			// Replace combobox with edit
+			var callback = function(value) {
+				builder.callback('combobox', 'change', data, value, builder);
+			};
+
+			return builder._controlHandlers['edit'](parentContainer, data, builder, callback);
+		}
+
+		console.error('It seems widget doesn\'t require overwriting.');
+	},
+
 	build: function(parent, data, hasVerticalParent) {
 
 		// TODO: check and probably remove additional containers
@@ -3325,8 +3304,10 @@ L.Control.JSDialogBuilder = L.Control.extend({
 
 			var containerToInsert = parent;
 
-			if (childData.dialogid)
+			if (childData.dialogid) {
 				containerToInsert.id = childData.dialogid;
+				this.dialogId = childData.dialogid;
+			}
 
 			var isVertical = childData.vertical === 'true' || childData.vertical === true ? true : false;
 
@@ -3377,7 +3358,10 @@ L.Control.JSDialogBuilder = L.Control.extend({
 			var handler = this._controlHandlers[childType];
 
 			if (handler) {
-				processChildren = handler(childObject, childData, this);
+				if (this.requiresOverwriting(this, childData))
+					processChildren = this.overwriteHandler(childObject, childData, this);
+				else
+					processChildren = handler(childObject, childData, this);
 				this.postProcess(childObject, childData);
 			} else
 				window.app.console.warn('JSDialogBuilder: Unsupported control type: "' + childType + '"');
@@ -3447,6 +3431,18 @@ L.Control.JSDialogBuilder.getMenuStructureForMobileWizard = function(menu, mainM
 	}
 
 	return menuStructure;
+};
+
+JSDialog._scrollIntoViewBlockOption = function(option) {
+	if (option === 'nearest' || option === 'center') {
+		// compatibility with older firefox
+		var match = window.navigator.userAgent.match(/Firefox\/([0-9]+)\./);
+		var firefoxVer = match ? parseInt(match[1]) : 58;
+		var blockOption = firefoxVer >= 58 ? option : 'start';
+		return blockOption;
+	}
+
+	return option;
 };
 
 L.control.jsDialogBuilder = function (options) {

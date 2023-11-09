@@ -93,6 +93,12 @@ L.Control.TopToolbar = L.Control.extend({
 			{type: 'button',  id: 'closemobile',  img: 'closemobile', desktop: false, mobile: false, tablet: true, hidden: true},
 			{type: 'button',  id: 'save', img: 'save', hint: _UNO('.uno:Save'), lockUno: '.uno:Save'},
 			{type: 'button',  id: 'print', img: 'print', hint: _UNO('.uno:Print', 'text'), mobile: false, tablet: false, lockUno: '.uno:Print'},
+			{type: 'menu',  id: 'print-options',  img: 'print', hint: _UNO('.uno:Print', 'text'), mobile: false, tablet: false, lockUno: '.uno:Print',
+				items: [
+					{id: 'print-active-sheet', text: _('Active Sheet')},
+					{id: 'print-all-sheets', text: _('All Sheets')},
+				]
+			},
 			{type: 'break', id: 'savebreak', mobile: false},
 			{type: 'button',  id: 'undo',  img: 'undo', hint: _UNO('.uno:Undo'), uno: 'Undo', disabled: true, mobile: false},
 			{type: 'button',  id: 'redo',  img: 'redo', hint: _UNO('.uno:Redo'), uno: 'Redo', disabled: true, mobile: false},
@@ -240,12 +246,11 @@ L.Control.TopToolbar = L.Control.extend({
 			{type: 'button',  id: 'edit',  img: 'edit'},
 			{type: 'button',  id: 'sidebar', img: 'sidebar_modify_page', hint: _UNO('.uno:Sidebar', '', true), uno: '.uno:SidebarDeck.PropertyDeck', hidden: true},
 			{type: 'button',  id: 'modifypage', img: 'sidebar_modify_page', hint: _UNO('.uno:ModifyPage', 'presentation', true), uno: '.uno:ModifyPage', hidden: true},
-			{type: 'button',  id: 'sidebarmodifypage', img: 'sidebar_modify_page',  hint: _UNO('.uno:ModifyPage', 'drawing', true), uno: '.uno:SidebarDeck.PropertyDeck', hidden: true},
 			{type: 'button',  id: 'slidechangewindow', img: 'sidebar_slide_change', hint: _UNO('.uno:SlideChangeWindow', 'presentation', true), uno: '.uno:SlideChangeWindow', hidden: true},
 			{type: 'button',  id: 'customanimation', img: 'sidebar_custom_animation', hint: _UNO('.uno:CustomAnimation', 'presentation', true), uno: '.uno:CustomAnimation', hidden: true},
 			{type: 'button',  id: 'masterslidespanel', img: 'sidebar_master_slides', hint: _UNO('.uno:MasterSlidesPanel', 'presentation', true), uno: '.uno:MasterSlidesPanel', hidden: true},
 			{type: 'button',  id: 'navigator', img: 'navigator', hint: _UNO('.uno:Navigator'), uno: '.uno:Navigator', hidden: true},
-			{type: 'button',  id: 'fold',  img: 'fold', desktop: true, mobile: false, hidden: true},
+			{type: 'button',  id: 'fold',  img: 'fold', hint: _('Hide Menu'), desktop: true, mobile: false, hidden: true},
 			{type: 'button',  id: 'hamburger-tablet',  img: 'fold', desktop: false, mobile: false, tablet: true, iosapptablet: false, hidden: true},
 		];
 	},
@@ -336,7 +341,8 @@ L.Control.TopToolbar = L.Control.extend({
 				toolbarUp.show('reset', 'textalign', 'wraptext', 'breakspacing', 'insertannotation', 'conditionalformaticonset',
 					'numberformatcurrency', 'numberformatpercent',
 					'numberformatincdecimals', 'numberformatdecdecimals', 'break-number', 'togglemergecells', 'breakmergecells',
-					'setborderstyle', 'sortascending', 'sortdescending', 'breaksorting', 'backgroundcolor', 'breaksidebar', 'sidebar');
+					'setborderstyle', 'sortascending', 'sortdescending', 'breaksorting', 'backgroundcolor', 'breaksidebar', 'sidebar', 'print-options');
+				toolbarUp.hide('print');
 				toolbarUp.remove('styles');
 			}
 
@@ -348,11 +354,12 @@ L.Control.TopToolbar = L.Control.extend({
 
 			break;
 		case 'text':
-			if (toolbarUp)
+			if (toolbarUp) {
 				toolbarUp.show('reset', 'leftpara', 'centerpara', 'rightpara', 'justifypara', 'breakpara', 'linespacing',
 					'breakspacing', 'defaultbullet', 'defaultnumbering', 'breakbullet', 'incrementindent', 'decrementindent',
 					'breakindent', 'inserttable', 'insertannotation', 'backcolor', 'breaksidebar', 'sidebar');
-
+				toolbarUp.hide('print-options');
+			}
 			break;
 		case 'presentation':
 			// Fill the style select box if not yet filled
@@ -377,13 +384,15 @@ L.Control.TopToolbar = L.Control.extend({
 					'leftpara', 'centerpara', 'rightpara', 'justifypara', 'breakpara', 'linespacing',
 					'breakspacing', 'defaultbullet', 'defaultnumbering', 'breakbullet', 'inserttextbox', 'inserttable',  'insertannotation', 'backcolor',
 					'breaksidebar', 'modifypage', 'slidechangewindow', 'customanimation', 'masterslidespanel', 'navigator');
+				toolbarUp.hide('print-options');
 			}
 			break;
 		case 'drawing':
 			if (toolbarUp) {
 				toolbarUp.show('leftpara', 'centerpara', 'rightpara', 'justifypara', 'breakpara', 'linespacing',
 					'breakspacing', 'defaultbullet', 'defaultnumbering', 'breakbullet', 'inserttextbox', 'inserttable', 'backcolor',
-					'breaksidebar', 'sidebarmodifypage', 'insertconnectors');
+					'breaksidebar', 'sidebar', 'insertconnectors');
+				toolbarUp.hide('print-options');
 			}
 			break;
 		}

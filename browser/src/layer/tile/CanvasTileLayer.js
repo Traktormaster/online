@@ -3,7 +3,7 @@
  * L.CanvasTileLayer is a layer with canvas based rendering.
  */
 
-/* global app L CanvasSectionContainer CanvasOverlay CDarkOverlay CSplitterLine CStyleData $ _ CPointSet CPolyUtil CPolygon Cursor CCellCursor CCellSelection PathGroupType UNOKey UNOModifier Uint8ClampedArray Uint8Array */
+/* global app L CanvasSectionContainer CanvasOverlay CDarkOverlay CSplitterLine CStyleData $ _ CPointSet CPolyUtil CPolygon Cursor CCellCursor CCellSelection PathGroupType UNOKey UNOModifier Uint8ClampedArray Uint8Array Uint32Array */
 
 /*eslint no-extend-native:0*/
 if (typeof String.prototype.startsWith !== 'function') {
@@ -242,7 +242,6 @@ L.TileSectionManager = L.Class.extend({
 		this._canvas = this._layer._canvas;
 		this._map = this._layer._map;
 		var mapSize = this._map.getPixelBoundsCore().getSize();
-		this._oscCtxs = [];
 		this._tilesSection = null; // Shortcut.
 
 		this._sectionContainer = new CanvasSectionContainer(this._canvas, this._layer.isCalc() /* disableDrawing? */);
@@ -606,14 +605,6 @@ L.TileSectionManager = L.Class.extend({
 		this._sectionContainer.requestReDraw();
 	},
 
-	_viewReset: function () {
-		var ctx = this._paintContext();
-		for (var i = 0; i < ctx.paneBoundsList.length; ++i) {
-			this._tilesSection.oscCtxs[i].fillStyle = this._sectionContainer.getClearColor();
-			this._tilesSection.oscCtxs[i].fillRect(0, 0, this._tilesSection.offscreenCanvases[i].width, this._tilesSection.offscreenCanvases[i].height);
-		}
-	},
-
 	_getZoomDocPos: function (pinchCenter, paneBounds, splitPos, scale, findFreePaneCenter) {
 		var inXBounds = (pinchCenter.x >= paneBounds.min.x) && (pinchCenter.x <= paneBounds.max.x);
 		var inYBounds = (pinchCenter.y >= paneBounds.min.y) && (pinchCenter.y <= paneBounds.max.y);
@@ -885,6 +876,9 @@ L.CanvasTileLayer = L.Layer.extend({
 		// Tile garbage collection counter
 		this._gcCounter = 0;
 
+		// Queue of tiles which were GC'd earlier than coolwsd expected
+		this._fetchKeyframeQueue = [];
+
 		// Position and size of the selection start (as if there would be a cursor caret there).
 
 		// View cursors with viewId to 'cursor info' mapping
@@ -975,6 +969,7 @@ L.CanvasTileLayer = L.Layer.extend({
 		this._mentionText = [];
 
 		this._moveInProgress = false;
+		this._canonicalIdInitialized = false;
 	},
 
 	_initContainer: function () {
@@ -1149,53 +1144,6 @@ L.CanvasTileLayer = L.Layer.extend({
 		}
 	},
 
-	_retainParent: function (x, y, z, part, mode, minZoom) {
-		var x2 = Math.floor(x / 1.2),
-		    y2 = Math.floor(y / 1.2),
-		    z2 = z - 1;
-
-		var key = x2 + ':' + y2 + ':' + z2 + ':' + part + ':' + mode,
-		    tile = this._tiles[key];
-
-		if (tile && tile.active) {
-			tile.retain = true;
-			return true;
-
-		} else if (tile && tile.loaded) {
-			tile.retain = true;
-		}
-
-		if (z2 > minZoom) {
-			return this._retainParent(x2, y2, z2, part, mode, minZoom);
-		}
-
-		return false;
-	},
-
-	_retainChildren: function (x, y, z, part, mode, maxZoom) {
-
-		for (var i = 1.2 * x; i < 1.2 * x + 2; i++) {
-			for (var j = 1.2 * y; j < 1.2 * y + 2; j++) {
-
-				var key = Math.floor(i) + ':' + Math.floor(j) + ':' +
-					(z + 1) + ':' + part + ':' + mode,
-				    tile = this._tiles[key];
-
-				if (tile && tile.active) {
-					tile.retain = true;
-					continue;
-
-				} else if (tile && tile.loaded) {
-					tile.retain = true;
-				}
-
-				if (z + 1 < maxZoom) {
-					this._retainChildren(i, j, z + 1, part, mode, maxZoom);
-				}
-			}
-		}
-	},
-
 	_reset: function (center, zoom, hard, noPrune, noUpdate) {
 		var tileZoom = Math.round(zoom),
 		    tileZoomChanged = this._tileZoom !== tileZoom;
@@ -1229,6 +1177,10 @@ L.CanvasTileLayer = L.Layer.extend({
 	_resetClientVisArea: function ()  {
 		this._clientZoom = '';
 		this._clientVisibleArea = '';
+	},
+
+	_resetCanonicalIdStatus: function() {
+		this._canonicalIdInitialized = false;
 	},
 
 	_updateTileTwips: function () {
@@ -1351,9 +1303,11 @@ L.CanvasTileLayer = L.Layer.extend({
 		this._update();
 	},
 
-	toggleTileDebugMode: function() {
-		this.toggleTileDebugModeImpl();
-		this._requestNewTiles();
+	_refreshTilesInBackground: function() {
+		for (var key in this._tiles) {
+			this._tiles[key].wireId = 1;
+			this._tiles[key].invalidFrom = 0;
+		}
 	},
 
 	_sendClientZoom: function (forceUpdate) {
@@ -1420,8 +1374,8 @@ L.CanvasTileLayer = L.Layer.extend({
 		var zoom = this._map.getZoom();
 		var pixelBounds = this._map.getPixelBoundsCore(center, zoom);
 		var tileRange = this._pxBoundsToTileRange(pixelBounds);
-		var tilePositionsX = [];
-		var tilePositionsY = [];
+
+		var tileCombineQueue = [];
 		for (var j = tileRange.min.y; j <= tileRange.max.y; j++) {
 			for (var i = tileRange.min.x; i <= tileRange.max.x; i++) {
 				var coords = new L.TileCoordData(i * this._tileSize, j * this._tileSize, zoom, part, mode);
@@ -1430,32 +1384,73 @@ L.CanvasTileLayer = L.Layer.extend({
 					continue;
 
 				var key = this._tileCoordsToKey(coords);
-				if (this._tileHasContent(key))
+				if (!this._tileNeedsFetch(key))
 					continue;
+
+				tileCombineQueue.push(coords);
+			}
+		}
+		this._sendTileCombineRequest(tileCombineQueue);
+	},
+
+	_sendTileCombineRequest: function(tileCombineQueue) {
+		if (tileCombineQueue.length <= 0)
+			return;
+
+		// Sort into buckets of consistent part & mode.
+		var partMode = {};
+		for (var i = 0; i < tileCombineQueue.length; ++i)
+		{
+			var coords = tileCombineQueue[i];
+			// mode is a small number - give it 8 bits
+			var pmKey = (coords.part << 8) + coords.mode;
+			if (partMode[pmKey] === undefined)
+				partMode[pmKey] = [];
+			partMode[pmKey].push(coords);
+		}
+
+		for (var pmKey in partMode) // no keys method
+		{
+			var partTileQueue = partMode[pmKey];
+			var part = partTileQueue[0].part;
+			var mode = partTileQueue[0].mode;
+
+			var tilePositionsX = [];
+			var tilePositionsY = [];
+			var tileWids = [];
+
+			var added = {}; // uniqify
+			for (var i = 0; i < partTileQueue.length; ++i)
+			{
+				var coords = partTileQueue[i];
+				var key = this._tileCoordsToKey(coords);
+				// request each tile just once in these tilecombines
+				if (added[key])
+					continue;
+				added[key] = true;
+
+				// build parameters
+				var tile = this._tiles[key];
+				tileWids.push((tile && tile.wireId !== undefined) ? tile.wireId : 0);
 
 				var twips = this._coordsToTwips(coords);
 				tilePositionsX.push(twips.x);
 				tilePositionsY.push(twips.y);
 			}
-		}
-		if (tilePositionsX.length <= 0 || tilePositionsY.length <= 0) {
-			return;
-		}
-		this._sendTileCombineRequest(part, mode, tilePositionsX, tilePositionsY);
-	},
 
-	_sendTileCombineRequest: function(part, mode, tilePositionsX, tilePositionsY) {
-		var msg = 'tilecombine ' +
-			'nviewid=0 ' +
-			'part=' + part + ' ' +
-			((mode !== 0) ? ('mode=' + mode + ' ') : '') +
-			'width=' + this._tileWidthPx + ' ' +
-			'height=' + this._tileHeightPx + ' ' +
-			'tileposx=' + tilePositionsX + ' '	+
-			'tileposy=' + tilePositionsY + ' ' +
-			'tilewidth=' + this._tileWidthTwips + ' ' +
-			'tileheight=' + this._tileHeightTwips;
-		app.socket.sendMessage(msg, '');
+			var msg = 'tilecombine ' +
+			    'nviewid=0 ' +
+			    'part=' + part + ' ' +
+			    ((mode !== 0) ? ('mode=' + mode + ' ') : '') +
+			    'width=' + this._tileWidthPx + ' ' +
+			    'height=' + this._tileHeightPx + ' ' +
+		            'tileposx=' + tilePositionsX.join(',') + ' ' +
+		            'tileposy=' + tilePositionsY.join(',') + ' ' +
+		            'oldwid=' + tileWids.join(',') + ' ' +
+			    'tilewidth=' + this._tileWidthTwips + ' ' +
+			    'tileheight=' + this._tileHeightTwips;
+			app.socket.sendMessage(msg, '');
+		}
 	},
 
 	getMaxDocSize: function () {
@@ -1527,26 +1522,40 @@ L.CanvasTileLayer = L.Layer.extend({
 			return this._tiles[key];
 		}
 		var tile = {
-			wid: 0,
 			coords: coords,
 			current: true, // is this currently visible
-			retain: false, // was it previously visible cf. _pruneTiles
 			canvas: null,  // canvas ready to render
+			imgDataCache: null, // flat byte array of canvas data
 			rawDeltas: null, // deltas ready to decompress
-			loaded: false, // is the tile data present & valid
+			deltaCount: 0, // how many deltas on top of the keyframe
+			updateCount: 0, // how many updates did we have
+			loadCount: 0, // how many times did we get a new keyframe
+			gcErrors: 0, // count freed keyframe in JS, but kept in wsd.
+			missingContent: 0, // how many times rendered without content
+			invalidateCount: 0, // how many invalidations touched this tile
+			viewId: 0, // canonical view id
+			wireId: 0, // monotonic timestamp for optimizing fetch
+			invalidFrom: 0, // a wireId - for avoiding races on invalidation
 			lastRendered: new Date(),
 			hasContent: function() {
-				return tile.canvas || (tile.rawDeltas && tile.rawDeltas.length > 0);
+				return this.imgDataCache || this.hasKeyframe();
+			},
+			needsFetch: function() {
+				return this.invalidFrom >= this.wireId || !this.hasContent();
+			},
+			hasKeyframe: function() {
+				return this.rawDeltas && this.rawDeltas.length > 0;
 			}
 		};
 		this._emptyTilesCount += 1;
 		this._tiles[key] = tile;
+
 		return tile;
 	},
 
-	_tileHasContent: function(key) {
+	_tileNeedsFetch: function(key) {
 		var tile = this._tiles[key];
-		return tile && tile.hasContent();
+		return !tile || tile.needsFetch();
 	},
 
 	_getToolbarCommandsValues: function() {
@@ -1554,6 +1563,17 @@ L.CanvasTileLayer = L.Layer.extend({
 			var command = this._map.unoToolbarCommands[i];
 			app.socket.sendMessage('commandvalues command=' + command);
 		}
+	},
+
+	_cellRangeToTwipRect: function(cellRange) {
+		var strTwips = cellRange.match(/\d+/g);
+		var startCellAddress = [parseInt(strTwips[0]), parseInt(strTwips[1])];
+		var startCellRectPixel = this.sheetGeometry.getCellRect(startCellAddress[0], startCellAddress[1]);
+		var topLeftTwips = this._corePixelsToTwips(startCellRectPixel.min);
+		var endCellAddress = [parseInt(strTwips[2]), parseInt(strTwips[3])];
+		var endCellRectPixel = this.sheetGeometry.getCellRect(endCellAddress[0], endCellAddress[1]);
+		var bottomRightTwips = this._corePixelsToTwips(endCellRectPixel.max);
+		return new L.Bounds(new L.Point(topLeftTwips.x, topLeftTwips.y), new L.Point(bottomRightTwips.x, bottomRightTwips.y));
 	},
 
 	_onMessage: function (textMsg, img) {
@@ -1608,13 +1628,38 @@ L.CanvasTileLayer = L.Layer.extend({
 			}
 			else {
 				var msg = 'invalidatetiles: ';
+
+				// see invalidatetiles: in wsd/protocol.txt for structure
+				var tmp = payload.substring('EMPTY'.length).replaceAll(',', ' , ');
+				var tokens = tmp.split(/[ \n]+/);
+
+				var wireIdToken = undefined;
+				var commaargs = [];
+
+				var commaarg = false;
+				for (var i = 0; i < tokens.length; i++) {
+					if (tokens[i] === ',') {
+						commaarg = true;
+						continue;
+					}
+					if (commaarg) {
+						commaargs.push(tokens[i]);
+						commaarg = false;
+					}
+					else if (tokens[i].startsWith('wid=')) {
+						wireIdToken = tokens[i];
+					}
+					else if (tokens[i])
+						console.error('unsupported invalidatetile token: ' + tokens[i]);
+				}
+
 				if (this.isWriter()) {
 					msg += 'part=0 ';
 				} else {
-					var tokens = payload.substring('EMPTY'.length + 1);
-					tokens = tokens.split(',');
-					var part = parseInt(tokens[0] ? tokens[0] : '');
-					var mode = parseInt((tokens.length > 1 && tokens[1]) ? tokens[1] : '');
+
+					var part = parseInt(commaargs.length > 0 ? commaargs[0] : '');
+					var mode = parseInt(commaargs.length > 1 ? commaargs[1] : '');
+
 					mode = (isNaN(mode) ? this._selectedMode : mode);
 					msg += 'part=' + (isNaN(part) ? this._selectedPart : part)
 						+ ((mode && mode !== 0) ? (' mode=' + mode) : '')
@@ -1623,6 +1668,8 @@ L.CanvasTileLayer = L.Layer.extend({
 				msg += 'x=0 y=0 ';
 				msg += 'width=' + this._docWidthTwips + ' ';
 				msg += 'height=' + this._docHeightTwips;
+				if (wireIdToken !== undefined)
+					msg += ' ' + wireIdToken;
 				this._onInvalidateTilesMsg(msg);
 			}
 		}
@@ -1766,21 +1813,27 @@ L.CanvasTileLayer = L.Layer.extend({
 			this._onFormFieldButtonMsg(textMsg);
 		}
 		else if (textMsg.startsWith('canonicalidchange:')) {
+			var payload = textMsg.substring('canonicalidchange:'.length + 1);
+			var viewRenderedState = payload.split('=')[3].split(' ')[0];
 			if (this._debugData) {
-				var payload = textMsg.substring('canonicalidchange:'.length + 1);
 				var viewId = payload.split('=')[1].split(' ')[0];
 				var canonicalId = payload.split('=')[2].split(' ')[0];
-				this._debugData['canonicalViewId'].setPrefix('Canonical id changed to: ' + canonicalId + ' for view id: ' + viewId);
+				this._debugData['canonicalViewId'].setPrefix('Canonical id changed to: ' + canonicalId + ' for view id: ' + viewId + ' with view renderend state: ' + viewRenderedState);
 			}
-			this._requestNewTiles();
+			if (!this._canonicalIdInitialized) {
+				this._canonicalIdInitialized = true;
+				this._update();
+			} else if (viewRenderedState !== this._map.uiManager.previousTheme) {
+				this._requestNewTiles();
+				this._invalidateAllPreviews();
+				this.redraw();
+			}
 		}
 		else if (textMsg.startsWith('comment:')) {
 			var obj = JSON.parse(textMsg.substring('comment:'.length + 1));
-			if (obj.comment.cellPos) {
-				// cellPos is in print-twips so convert to display twips.
-				var cellPos = L.Bounds.parse(obj.comment.cellPos);
-				cellPos = this._convertToTileTwipsSheetArea(cellPos);
-				obj.comment.cellPos = cellPos.toCoreString();
+			if (obj.comment.cellRange) {
+				// convert cellRange e.g. "A1 B2" to its bounds in display twips.
+				obj.comment.cellPos = this._cellRangeToTwipRect(obj.comment.cellRange).toCoreString();
 			}
 			app.sectionContainer.getSectionWithName(L.CSections.CommentList.name).onACKComment(obj);
 		}
@@ -1796,6 +1849,9 @@ L.CanvasTileLayer = L.Layer.extend({
 			app.sectionContainer.setClearColor('#' + textMsg.substring('applicationbackgroundcolor:'.length + 1).trim());
 			app.sectionContainer.requestReDraw();
 		}
+		else if (textMsg.startsWith('documentbackgroundcolor:')) {
+			app.sectionContainer.setDocumentBackgroundColor('#' + textMsg.substring('documentbackgroundcolor:'.length + 1).trim());
+		}
 		else if (textMsg.startsWith('contentcontrol:')) {
 			textMsg = textMsg.substring('contentcontrol:'.length + 1);
 			if (!app.sectionContainer.doesSectionExist(L.CSections.ContentControl.name)) {
@@ -1810,8 +1866,10 @@ L.CanvasTileLayer = L.Layer.extend({
 		}
 		else if (textMsg.startsWith('a11yfocuschanged:')) {
 			obj = JSON.parse(textMsg.substring('a11yfocuschanged:'.length + 1));
+			var listPrefixLength = obj.listPrefixLength !== undefined ? parseInt(obj.listPrefixLength) : 0;
 			this._map._textInput.onAccessibilityFocusChanged(
-				obj.content, parseInt(obj.position), parseInt(obj.start), parseInt(obj.end), parseInt(obj.force) > 0);
+				obj.content, parseInt(obj.position), parseInt(obj.start), parseInt(obj.end),
+				listPrefixLength, parseInt(obj.force) > 0);
 		}
 		else if (textMsg.startsWith('a11ycaretchanged:')) {
 			obj = JSON.parse(textMsg.substring('a11yfocuschanged:'.length + 1));
@@ -1821,9 +1879,31 @@ L.CanvasTileLayer = L.Layer.extend({
 			obj = JSON.parse(textMsg.substring('a11ytextselectionchanged:'.length + 1));
 			this._map._textInput.onAccessibilityTextSelectionChanged(parseInt(obj.start), parseInt(obj.end));
 		}
+		else if (textMsg.startsWith('a11yfocusedcellchanged:')) {
+			obj = JSON.parse(textMsg.substring('a11yfocusedcellchanged:'.length + 1));
+			var outCount = obj.outCount !== undefined ? parseInt(obj.outCount) : 0;
+			var inList = obj.inList !== undefined ? obj.inList : [];
+			var row = parseInt(obj.row);
+			var col = parseInt(obj.col);
+			var rowSpan = obj.rowSpan !== undefined ? parseInt(obj.rowSpan) : 1;
+			var colSpan = obj.colSpan !== undefined ? parseInt(obj.colSpan) : 1;
+			this._map._textInput.onAccessibilityFocusedCellChanged(
+				outCount, inList, row, col, rowSpan, colSpan, obj.paragraph);
+		}
+		else if (textMsg.startsWith('a11yeditinginselectionstate:')) {
+			obj = JSON.parse(textMsg.substring('a11yeditinginselectionstate:'.length + 1));
+			this._map._textInput.onAccessibilityEditingInSelectionState(
+				parseInt(obj.cell) > 0, parseInt(obj.enabled) > 0, obj.selection, obj.paragraph);
+		}
+		else if (textMsg.startsWith('a11yselectionchanged:')) {
+			obj = JSON.parse(textMsg.substring('a11yselectionchanged:'.length + 1));
+			this._map._textInput.onAccessibilitySelectionChanged(
+				parseInt(obj.cell) > 0, obj.action, obj.name, obj.text);
+		}
 		else if (textMsg.startsWith('a11yfocusedparagraph:')) {
 			obj = JSON.parse(textMsg.substring('a11yfocusedparagraph:'.length + 1));
-			this._map._textInput.setA11yFocusedParagraph(obj.content, parseInt(obj.position), parseInt(obj.start), parseInt(obj.end));
+			this._map._textInput.setA11yFocusedParagraph(
+				obj.content, parseInt(obj.position), parseInt(obj.start), parseInt(obj.end));
 		}
 		else if (textMsg.startsWith('a11ycaretposition:')) {
 			var pos = textMsg.substring('a11ycaretposition:'.length + 1);
@@ -1831,7 +1911,7 @@ L.CanvasTileLayer = L.Layer.extend({
 		}
 		else if (textMsg.startsWith('colorpalettes:')) {
 			var json = JSON.parse(textMsg.substring('colorpalettes:'.length + 1));
-			this._map.fire('colorpalettes:', json);
+			app.colorPalettes['ThemeColors'].colors = json.ThemeColors;
 		}
 	},
 
@@ -1841,7 +1921,7 @@ L.CanvasTileLayer = L.Layer.extend({
 		this._map.fire('tabstoplistupdate', json);
 	},
 
-	toggleTileDebugModeImpl: function() {
+	toggleTileDebugMode: function() {
 		this._debug = !this._debug;
 		if (!this._debug) {
 			this._map.removeLayer(this._debugInfo);
@@ -1869,6 +1949,9 @@ L.CanvasTileLayer = L.Layer.extend({
 			this._map.addLayer(this._debugTrace);
 		else
 			this._map.removeLayer(this._debugTrace);
+
+		// redraw canvas with changed debug overlays
+		this._painter.update();
 	},
 
 	_onCommandValuesMsg: function (textMsg) {
@@ -2139,6 +2222,11 @@ L.CanvasTileLayer = L.Layer.extend({
 
 			videoDesc.width = bottomRightPoint.x - topLeftPoint.x;
 			videoDesc.height = bottomRightPoint.y - topLeftPoint.y;
+		}
+		// proxy cannot identify RouteToken if it is encoded
+		var routeTokenIndex = videoDesc.url.indexOf('%26RouteToken=');
+		if (routeTokenIndex != -1) {
+			videoDesc.url = videoDesc.url.replace('%26RouteToken=', '&amp;RouteToken=');
 		}
 
 		var videoToInsert = '<?xml version="1.0" encoding="UTF-8"?>\
@@ -2489,7 +2577,7 @@ L.CanvasTileLayer = L.Layer.extend({
 	},
 
 	_showURLPopUp: function(position, url) {
-		var parent = L.DomUtil.create('div');
+		var parent = L.DomUtil.create('div', '');
 		L.DomUtil.createWithId('div', 'hyperlink-pop-up-preview', parent);
 		var link = L.DomUtil.createWithId('a', 'hyperlink-pop-up', parent);
 		link.innerText = url;
@@ -2578,7 +2666,8 @@ L.CanvasTileLayer = L.Layer.extend({
 		textMsg = textMsg.substring('invalidatecursor:'.length + 1);
 		var obj = JSON.parse(textMsg);
 		var recCursor = this._getEditCursorRectangle(obj);
-		if (recCursor === undefined) {
+		if (recCursor === undefined || this.persistCursorPositionInWriter) {
+			this.persistCursorPositionInWriter = false;
 			return;
 		}
 		var modifierViewId = parseInt(obj.viewId);
@@ -2842,9 +2931,12 @@ L.CanvasTileLayer = L.Layer.extend({
 
 	_removeView: function(viewId) {
 		// Remove selection, if any.
-		if (this._viewSelections[viewId] && this._viewSelections[viewId].selection) {
-			this._viewSelections[viewId].selection.remove();
-			this._viewSelections[viewId].selection = undefined;
+		if (this._viewSelections[viewId]) {
+			if (this._viewSelections[viewId].selection) {
+				this._viewSelections[viewId].selection.remove();
+				this._viewSelections[viewId].selection = undefined;
+			}
+			delete this._viewSelections[viewId];
 		}
 
 		// Remove the view and update (to refresh as needed).
@@ -3687,7 +3779,7 @@ L.CanvasTileLayer = L.Layer.extend({
 	_onZoomEnd: function () {
 		this._isZooming = false;
 		if (!this.isCalc())
-			this._replayPrintTwipsMsgs();
+			this._replayPrintTwipsMsgs(false);
 		this._onUpdateCursor(null, true);
 		this.updateAllViewCursors();
 	},
@@ -3755,6 +3847,9 @@ L.CanvasTileLayer = L.Layer.extend({
 		&& (!this.isCalc() || this._lastVisibleCursorRef !== this._visibleCursor)
 		&& this._allowViewJump()) {
 
+			// Cursor invalidation should take most precedence among all the scrolling to follow the cursor
+			// so here we disregard all the pending scrolling
+			this._map._docLayer._painter._sectionContainer.getSectionWithName(L.CSections.Scroll.name).pendingScrollEvent = null;
 			var paneRectsInLatLng = this.getPaneLatLngRectangles();
 			if (!this._visibleCursor.isInAny(paneRectsInLatLng)) {
 				if (!(this._selectionHandles.start && this._selectionHandles.start.isDragged) &&
@@ -4506,7 +4601,8 @@ L.CanvasTileLayer = L.Layer.extend({
 
 			this._addDropDownMarker();
 
-			var dontFocusDocument = this._isAnyInputFocused();
+			var focusOutOfDocument = document.activeElement === document.body;
+			var dontFocusDocument = this._isAnyInputFocused() || focusOutOfDocument;
 
 			// when the cell cursor is moving, the user is in the document,
 			// and the focus should leave the cell input bar
@@ -4519,29 +4615,7 @@ L.CanvasTileLayer = L.Layer.extend({
 			this._cellCursorMarker = undefined;
 		}
 		this._removeDropDownMarker();
-
-		//hyperlink pop-up from here
-		if (this._lastFormula && this._cellCursorMarker && this._lastFormula.substring(1, 10) == 'HYPERLINK')
-		{
-			var formula = this._lastFormula;
-			var targetURL = formula.substring(11, formula.length - 1).split(',')[0];
-			targetURL = targetURL.split('"').join('');
-			if (targetURL.startsWith('#')) {
-				targetURL = targetURL.split(';')[0];
-			} else {
-				targetURL = this._map.makeURLFromStr(targetURL);
-			}
-
-			this._closeURLPopUp();
-			if (targetURL) {
-				this._showURLPopUp(this._cellCursor.getNorthEast(), targetURL);
-			}
-
-		}
-		else if (this._map.hyperlinkPopup)
-		{
-			this._closeURLPopUp();
-		}
+		this._closeURLPopUp();
 	},
 
 	_onValidityListButtonMsg: function(textMsg) {
@@ -4760,10 +4834,6 @@ L.CanvasTileLayer = L.Layer.extend({
 		this._map.on('moveend', this._updateScrollOffset, this);
 	},
 
-	_onRequestLOKSession: function () {
-		app.socket.sendMessage('requestloksession');
-	},
-
 	// This is really just called on zoomend
 	_fitWidthZoom: function (e, maxZoom) {
 		if (this.isCalc())
@@ -4838,6 +4908,16 @@ L.CanvasTileLayer = L.Layer.extend({
 			+ '&outputWidth=' + this._tileHeightPx
 			+ '&tileHeight=' + this._tileWidthTwips
 			+ '&tileWidth=' + this._tileHeightTwips);
+	},
+
+	_invalidateAllPreviews: function () {
+		this._previewInvalidations = [];
+		for (var key in this._map._docPreviews) {
+			var preview = this._map._docPreviews[key];
+			preview.invalid = true;
+			this._previewInvalidations.push(new L.Bounds(new L.Point(0, 0), new L.Point(preview.maxWidth, preview.maxHeight)));
+		}
+		this._invalidatePreviews();
 	},
 
 	_invalidatePreviews: function () {
@@ -5002,21 +5082,23 @@ L.CanvasTileLayer = L.Layer.extend({
 	_debugShowTileData: function() {
 		this._debugData['loadCount'].setPrefix('Total of requested tiles: ' +
 				this._debugInvalidateCount + ', recv-tiles: ' + this._debugLoadTile +
-						       ', recv-delta: ' + this._debugLoadDelta);
+						       ', recv-delta: ' + this._debugLoadDelta +
+						       ', recv-update: ' + this._debugLoadUpdate);
 	},
 
 	_debugInit: function() {
-		this._debugTiles = {};
 		this._debugInvalidBounds = {};
 		this._debugInvalidBoundsMessage = {};
 		this._debugTimeout();
 		this._debugId = 0;
 		this._debugLoadTile = 0;
 		this._debugLoadDelta = 0;
+		this._debugLoadUpdate = 0;
 		this._debugInvalidateCount = 0;
 		this._debugRenderCount = 0;
 		this._debugDeltas = true;
 		this._debugDeltasDetail = false;
+
 		if (!this._debugData) {
 			this._debugData = {};
 			this._debugDataNames = ['canonicalViewId', 'tileCombine', 'fromKeyInputToInvalidate', 'ping', 'loadCount', 'postMessage'];
@@ -5107,11 +5189,6 @@ L.CanvasTileLayer = L.Layer.extend({
 		this._debugLoremPos = 0;
 
 		if (this._map._docLayer._docType === 'spreadsheet') {
-			var section = this._map._docLayer._painter._sectionContainer.getSectionWithName('calc grid');
-			if (section) {
-				section.setDrawingOrder(L.CSections.CalcGrid.drawingOrderDebug);
-				section.sectionProperties.strokeStyle = 'blue';
-			}
 			this._map._docLayer._painter._addSplitsSection();
 			this._map._docLayer._painter._sectionContainer.reNewAllSections(true /* redraw */);
 		}
@@ -5156,16 +5233,6 @@ L.CanvasTileLayer = L.Layer.extend({
 		app.socket.sendMessage('ping');
 	},
 
-	_debugAddInvalidationData: function(tile) {
-		if (tile._debugTile) {
-			tile._debugTile.setStyle({fillOpacity: 0.5, fillColor: 'blue'});
-			tile._debugTime.date = +new Date();
-			tile._debugTile.date = +new Date();
-			tile._debugInvalidateCount++;
-			this._debugInvalidateCount++;
-		}
-	},
-
 	_debugAddInvalidationMessage: function(message) {
 		this._debugInvalidBoundsMessage[this._debugId - 1] = message;
 		var messages = '';
@@ -5192,14 +5259,6 @@ L.CanvasTileLayer = L.Layer.extend({
 						rect.setStyle({fillOpacity: 0, opacity: 1 - (this._debugId - key) / 7});
 					}
 				} else {
-					rect.setStyle({fillOpacity: opac - 0.04});
-				}
-			}
-			for (key in this._debugTiles) {
-				rect = this._debugTiles[key];
-				var col = rect.options.fillColor;
-				opac = rect.options.fillOpacity;
-				if (col === 'blue' && opac >= 0.04 && rect.date + 1000 < +new Date()) {
 					rect.setStyle({fillOpacity: opac - 0.04});
 				}
 			}
@@ -5327,12 +5386,17 @@ L.CanvasTileLayer = L.Layer.extend({
 		this._printTwipsMessagesForReplay.clear();
 	},
 
-	_replayPrintTwipsMsgs: function () {
+	_replayPrintTwipsMsgs: function (differentSheet) {
 		if (!this._printTwipsMessagesForReplay) {
 			return;
 		}
 
-		this._printTwipsMessagesForReplay.forEach(this._onMessage.bind(this));
+		this._printTwipsMessagesForReplay.forEach(function (msg) {
+			// don't try and replace graphic selection if the sheet/page has changed
+			var skipMessage = differentSheet && msg.startsWith('graphicselection:');
+			if (!skipMessage)
+				this._onMessage(msg);
+		}.bind(this));
 	},
 
 	_replayPrintTwipsMsg: function (msgType) {
@@ -5575,7 +5639,6 @@ L.CanvasTileLayer = L.Layer.extend({
 		}
 		map.on('zoomend', L.bind(this.eachView, this, this._viewCursors, this._onUpdateViewCursor, this, false));
 		map.on('dragstart', this._onDragStart, this);
-		map.on('requestloksession', this._onRequestLOKSession, this);
 		map.on('error', this._mapOnError, this);
 		if (map.options.autoFitWidth !== false) {
 			// always true since autoFitWidth is never set
@@ -5754,8 +5817,6 @@ L.CanvasTileLayer = L.Layer.extend({
 		if (this._docType === 'spreadsheet' && this._annotations !== 'undefined') {
 			app.socket.sendMessage('commandvalues command=.uno:ViewAnnotationsPosition');
 		}
-
-		this._painter._viewReset();
 	},
 
 	_removeSplitters: function () {
@@ -5781,32 +5842,11 @@ L.CanvasTileLayer = L.Layer.extend({
 	},
 
 	_pruneTiles: function () {
+		// update tile.current for the view
 		if (app.file.fileBasedView)
 			this._updateFileBasedView(true);
 
-		var key, tile;
-
-		// keep everything current visible
-		for (key in this._tiles) {
-			tile = this._tiles[key];
-			tile.retain = tile.current;
-		}
-
-		for (key in this._tiles) {
-			tile = this._tiles[key];
-			if (tile.current && !tile.active) {
-				var coords = tile.coords;
-				if (!this._retainParent(coords.x, coords.y, coords.z, coords.part, coords.mode, coords.z - 5)) {
-					this._retainChildren(coords.x, coords.y, coords.z, coords.part, coords.mode, coords.z + 2);
-				}
-			}
-		}
-
-		for (key in this._tiles) {
-			if (!this._tiles[key].retain) {
-				this._removeTile(key);
-			}
-		}
+		this._garbageCollect();
 	},
 
 	_setZoomTransforms: function () {
@@ -5997,16 +6037,6 @@ L.CanvasTileLayer = L.Layer.extend({
 		return mostVisiblePart;
 	},
 
-	// TODO: unused method?
-	_doesQueueIncludeTileInfo: function (queue, part, mode, x, y) {
-		for (var i = 0; i < queue.length; i++) {
-			if (queue[i].part === part && queue[i].mode === mode &&
-				queue[i].x === x && queue[i].y === y)
-				return true;
-		}
-		return false;
-	},
-
 	_sortFileBasedQueue: function (queue) {
 		for (var i = 0; i < queue.length - 1; i++) {
 			for (var j = i + 1; j < queue.length; j++) {
@@ -6123,9 +6153,8 @@ L.CanvasTileLayer = L.Layer.extend({
 
 			for (i = 0; i < queue.length; i++) {
 				var tempTile = this._tiles[this._tileCoordsToKey(queue[i])];
-				if (tempTile && tempTile.loaded) {
+				if (tempTile)
 					tempTile.current = true;
-				}
 			}
 		}
 
@@ -6136,22 +6165,53 @@ L.CanvasTileLayer = L.Layer.extend({
 			this._sendClientVisibleArea();
 			this._sendClientZoom();
 
+			var tileCombineQueue = [];
 			for (var i = 0; i < queue.length; i++) {
 				var key = this._tileCoordsToKey(queue[i]);
 				var tile = this._tiles[key];
 				if (!tile)
 					tile = this.createTile(queue[i], key);
-				if (!tile.loaded || !tile.hasContent())
-					this._sendTileCombineRequest(queue[i].part, queue[i].mode,
-								     (queue[i].x / this._tileSize) * this._tileWidthTwips,
-								     (queue[i].y / this._tileSize) * this._tileHeightTwips);
+				if (tile.needsFetch())
+					tileCombineQueue.push(queue[i]);
+			}
+			this._sendTileCombineRequest(tileCombineQueue);
+		}
+	},
+
+	_getMissingTiles: function (pixelBounds, zoom) {
+		var tileRanges = this._pxBoundsToTileRanges(pixelBounds);
+		var queue = [];
+
+		// create a queue of coordinates to load tiles from
+		for (var rangeIdx = 0; rangeIdx < tileRanges.length; ++rangeIdx) {
+			var tileRange = tileRanges[rangeIdx];
+			for (var j = tileRange.min.y; j <= tileRange.max.y; ++j) {
+				for (var i = tileRange.min.x; i <= tileRange.max.x; ++i) {
+					var coords = new L.TileCoordData(
+						i * this._tileSize,
+						j * this._tileSize,
+						zoom,
+						this._selectedPart,
+						this._selectedMode);
+
+					if (!this._isValidTile(coords)) { continue; }
+
+					var key = this._tileCoordsToKey(coords);
+					var tile = this._tiles[key];
+					if (tile && !tile.needsFetch())
+						tile.current = true;
+					else
+						queue.push(coords);
+				}
 			}
 		}
+
+		return queue;
 	},
 
 	_update: function (center, zoom) {
 		var map = this._map;
-		if (!map || this._documentInfo === '') {
+		if (!map || this._documentInfo === '' || !this._canonicalIdInitialized) {
 			return;
 		}
 
@@ -6174,10 +6234,6 @@ L.CanvasTileLayer = L.Layer.extend({
 		if (center === undefined) { center = map.getCenter(); }
 		if (zoom === undefined) { zoom = Math.round(map.getZoom()); }
 
-		var pixelBounds = map.getPixelBoundsCore(center, zoom);
-		var tileRanges = this._pxBoundsToTileRanges(pixelBounds);
-		var queue = [];
-
 		for (var key in this._tiles) {
 			var thiscoords = this._keyToTileCoords(key);
 			if (thiscoords.z !== zoom ||
@@ -6187,40 +6243,51 @@ L.CanvasTileLayer = L.Layer.extend({
 			}
 		}
 
-		// create a queue of coordinates to load tiles from
-		for (var rangeIdx = 0; rangeIdx < tileRanges.length; ++rangeIdx) {
-			var tileRange = tileRanges[rangeIdx];
-			for (var j = tileRange.min.y; j <= tileRange.max.y; ++j) {
-				for (var i = tileRange.min.x; i <= tileRange.max.x; ++i) {
-					var coords = new L.TileCoordData(
-						i * this._tileSize,
-						j * this._tileSize,
-						zoom,
-						this._selectedPart,
-						this._selectedMode);
-
-					if (!this._isValidTile(coords)) { continue; }
-
-					key = this._tileCoordsToKey(coords);
-					var tile = this._tiles[key];
-					var invalid = tile && tile._invalidCount && tile._invalidCount > 0;
-					if (tile && tile.loaded && !invalid) {
-						tile.current = true;
-					} else if (invalid) {
-						tile._invalidCount = 1;
-						queue.push(coords);
-					} else {
-						queue.push(coords);
-					}
-				}
-			}
-		}
+		var pixelBounds = map.getPixelBoundsCore(center, zoom);
+		var queue = this._getMissingTiles(pixelBounds, zoom);
 
 		this._sendClientVisibleArea();
 		this._sendClientZoom();
 
 		if (queue.length !== 0)
 			this._addTiles(queue);
+
+		if (this.isCalc() || this.isWriter())
+			this._initPreFetchAdjacentTiles(pixelBounds, zoom);
+	},
+
+	_initPreFetchAdjacentTiles: function (pixelBounds, zoom) {
+		if (this._adjacentTilePreFetcher)
+			clearTimeout(this._adjacentTilePreFetcher);
+
+		this._adjacentTilePreFetcher = setTimeout(function() {
+			// Extend what we request to include enough to populate a full
+			// scroll after or before the current viewport
+			//
+			// request separately from the current viewPort to get
+			// those tiles first.
+			var pixelHeight = pixelBounds.getSize().y;
+			var pixelPrevNextHeight = pixelHeight;
+			var pixelTopLeft = pixelBounds.getTopLeft();
+			var pixelBottomRight = pixelBounds.getBottomRight();
+
+			if (this.isCalc())
+				pixelPrevNextHeight = ~~ (pixelPrevNextHeight * 1.5);
+
+			pixelTopLeft.y += pixelHeight;
+			pixelBottomRight.y += pixelPrevNextHeight;
+			pixelBounds = new L.Bounds(pixelTopLeft, pixelBottomRight);
+			var queue = this._getMissingTiles(pixelBounds, zoom);
+
+			pixelTopLeft.y -= pixelHeight + pixelPrevNextHeight;
+			pixelBottomRight.y -= pixelHeight + pixelPrevNextHeight;
+			pixelBounds = new L.Bounds(pixelTopLeft, pixelBottomRight);
+			queue = queue.concat(this._getMissingTiles(pixelBounds, zoom));
+
+			if (queue.length !== 0)
+				this._addTiles(queue);
+
+		}.bind(this), 250 /*ms*/);
 	},
 
 	_sendClientVisibleArea: function (forceUpdate) {
@@ -6249,13 +6316,8 @@ L.CanvasTileLayer = L.Layer.extend({
 			app.socket.sendMessage(newClientVisibleArea);
 			if (!this._map._fatal && app.idleHandler._active && app.socket.connected())
 				this._clientVisibleArea = newClientVisibleArea;
-			if (this._debug) {
+			if (this._debug)
 				this._debugInfo.clearLayers();
-				for (var key in this._tiles) {
-					this._tiles[key]._debugPopup = null;
-					this._tiles[key]._debugTile = null;
-				}
-			}
 		}
 	},
 
@@ -6298,19 +6360,16 @@ L.CanvasTileLayer = L.Layer.extend({
 
 					key = this._tileCoordsToKey(coords);
 					tile = this._tiles[key];
-					if (tile && tile.loaded) {
+					if (tile && !tile.needsFetch())
 						tile.current = true;
-					} else {
+					else
 						queue.push(coords);
-					}
 				}
 			}
 		}
 
 		if (queue.length !== 0) {
-			var tilePositionsX = '';
-			var tilePositionsY = '';
-			var added = {};
+			var tileCombineQueue = [];
 
 			for (i = 0; i < queue.length; i++) {
 				coords = queue[i];
@@ -6318,28 +6377,14 @@ L.CanvasTileLayer = L.Layer.extend({
 				if (!this._tiles[key])
 					this.createTile(coords, key);
 
-				if (!this._tileHasContent(key)) {
-					// request each tile just once in these tilecombines
-					if (added[key])
-						continue;
-					added[key] = true;
-
-					var twips = this._coordsToTwips(coords);
-					if (tilePositionsX !== '') {
-						tilePositionsX += ',';
-					}
-					tilePositionsX += twips.x;
-					if (tilePositionsY !== '') {
-						tilePositionsY += ',';
-					}
-					tilePositionsY += twips.y;
+				if (this._tileNeedsFetch(key)) {
+					tileCombineQueue.push(coords);
 				}
 			}
 
-			if (tilePositionsX !== '' && tilePositionsY !== '') {
-				this._sendTileCombineRequest(this._selectedPart, this._selectedMode, tilePositionsX, tilePositionsY);
-			}
-			else {
+			if (tileCombineQueue.length >= 0) {
+				this._sendTileCombineRequest(tileCombineQueue);
+			} else {
 				// We have all necessary tile images in the cache, schedule a paint..
 				// This may not be immediate if we are now in a slurp events call.
 				this._painter.update();
@@ -6366,8 +6411,10 @@ L.CanvasTileLayer = L.Layer.extend({
 			this._map.fire('statusindicator', { statusType: 'alltilesloaded' });
 		}
 
-		tile.loaded = +new Date();
-		tile.active = true;
+		var now = new Date();
+
+		// Newly (pre)-fetched tiles, rendered or not should be privileged.
+		tile.lastRendered = now;
 
 		// Don't paint the tile, only dirty the sectionsContainer if it is in the visible area.
 		// _emitSlurpedTileEvents() will repaint canvas (if it is dirty).
@@ -6379,7 +6426,7 @@ L.CanvasTileLayer = L.Layer.extend({
 	// create tiles if needed for queued coordinates, and build a
 	// tilecombined request for any tiles we need to fetch.
 	_addTiles: function (coordsQueue) {
-		var coords, key, tile;
+		var coords, key;
 
 		for (var i = 0; i < coordsQueue.length; i++) {
 			coords = coordsQueue[i];
@@ -6408,7 +6455,7 @@ L.CanvasTileLayer = L.Layer.extend({
 
 			// tiles that do not interest us
 			key = this._tileCoordsToKey(coords);
-			if (this._tileHasContent(key)
+			if (!this._tileNeedsFetch(key)
 			    || coords.part !== this._selectedPart
 			    || coords.mode !== this._selectedMode) {
 				coordsQueue.splice(0, 1);
@@ -6464,41 +6511,9 @@ L.CanvasTileLayer = L.Layer.extend({
 			rectangles.push(rectQueue);
 		}
 
-		var twips;
-		var added = {};
-		for (var r = 0; r < rectangles.length; ++r) {
-			rectQueue = rectangles[r];
-			var tilePositionsX = '';
-			var tilePositionsY = '';
-			var tileWids = '';
-			for (i = 0; i < rectQueue.length; i++) {
-				coords = rectQueue[i];
-				key = this._tileCoordsToKey(coords);
+		for (var r = 0; r < rectangles.length; ++r)
+			this._sendTileCombineRequest(rectangles[r]);
 
-				// request each tile just once in these tilecombines
-				if (added[key])
-					continue;
-				added[key] = true;
-
-				twips = this._coordsToTwips(coords);
-
-				if (tilePositionsX !== '')
-					tilePositionsX += ',';
-				tilePositionsX += twips.x;
-
-				if (tilePositionsY !== '')
-					tilePositionsY += ',';
-				tilePositionsY += twips.y;
-
-				tile = this._tiles[this._tileCoordsToKey(coords)];
-				if (tileWids !== '')
-					tileWids += ',';
-				tileWids += tile && tile.wireId !== undefined ? tile.wireId : 0;
-			}
-
-			twips = this._coordsToTwips(coords);
-			this._sendTileCombineRequest(coords.part, this._selectedMode, tilePositionsX, tilePositionsY);
-		}
 		if (this._docType === 'presentation' || this._docType === 'drawing')
 			this._initPreFetchPartTiles();
 	},
@@ -6519,7 +6534,7 @@ L.CanvasTileLayer = L.Layer.extend({
 		var coords = this._twipsToCoords(tileMsg);
 		coords.z = tileMsg.zoom;
 		coords.part = tileMsg.part;
-		coords.mode = tileMsg.mode;
+		coords.mode = tileMsg.mode !== undefined ? tileMsg.mode : 0;
 		return coords;
 	},
 
@@ -6562,6 +6577,7 @@ L.CanvasTileLayer = L.Layer.extend({
 			tile.canvas.height = 0;
 			delete tile.canvas;
 		}
+		tile.imgDataCache = null;
 	},
 
 	_removeTile: function (key) {
@@ -6569,25 +6585,39 @@ L.CanvasTileLayer = L.Layer.extend({
 		if (!tile)
 			return;
 
-		if (!tile.loaded && this._emptyTilesCount > 0)
+		if (!tile.hasContent() && this._emptyTilesCount > 0)
 			this._emptyTilesCount -= 1;
-
-		if (this._debug && this._debugInfo && this._tiles[key]._debugPopup)
-			this._debugInfo.removeLayer(this._tiles[key]._debugPopup);
 
 		this._reclaimTileCanvasMemory(tile);
 		delete this._tiles[key];
 	},
 
 	// We keep tile content around, but it will need
-	// refreshing if we show it again.
-	_invalidateTile: function (key) {
+	// refreshing if we show it again - and we need to
+	// know what monotonic time the invalidate came from
+	// so we match this to a new incoming tile to unset
+	// the invalid state later.
+	_invalidateTile: function (key, wireId) {
 		var tile = this._tiles[key];
 		if (!tile)
 			return;
-		tile.loaded = false;
+
+		tile.invalidateCount++;
+
+		if (this._debug)
+			this._debugInvalidateCount++;
+
 		if (!tile.hasContent())
 			this._removeTile(key);
+		else
+		{
+			if (this._debugDeltas)
+				window.app.console.debug('invalidate tile ' + key + ' with wireId ' + wireId);
+			if (wireId)
+				tile.invalidFrom = wireId;
+			else
+				tile.invalidFrom = tile.wireId;
+		}
 	},
 
 	_prefetchTilesSync: function () {
@@ -6639,15 +6669,17 @@ L.CanvasTileLayer = L.Layer.extend({
 			tile.canvas = canvas;
 
 			// re-hydrate recursively from cached data
-			if (tile.rawDeltas)
+			if (tile.hasKeyframe())
 			{
 				if (this._debugDeltas)
 					window.app.console.log('Restoring a tile from cached delta at ' +
 							       this._tileCoordsToKey(tile.coords));
-				this._applyDelta(tile, tile.rawDeltas, true);
+				this._applyDelta(tile, tile.rawDeltas, true, false);
 			}
 		}
 		tile.lastRendered = now;
+		if (!tile.hasContent())
+			tile.missingContent++;
 	},
 
 	_maybeGarbageCollect: function() {
@@ -6673,14 +6705,17 @@ L.CanvasTileLayer = L.Layer.extend({
 		if (this._debugDeltas)
 			window.app.console.log('Garbage collect! iter: ' + this._gcCounter);
 
-		/* uncomment to exercise me harder.
-		   highNumCanvases = 3; lowNumCanvases = 2;
-		   highDeltaMemory = 1024*1024; lowDeltaMemory = 1024*128; */
+		/* uncomment to exercise me harder. */
+		/* highNumCanvases = 3; lowNumCanvases = 2;
+		   highDeltaMemory = 1024*1024; lowDeltaMemory = 1024*128;
+		   highTileCount = 100; lowTileCount = 50; */
 
 		var keys = [];
 		for (var key in this._tiles) // no .keys() method.
 			keys.push(key);
-		// sort by oldest.
+
+		// FIXME: should we sort by wireId - which is monotonic server ~time
+		// sort by oldest
 		keys.sort(function(a,b) { return b.lastRendered - a.lastRendered; });
 
 		var canvasKeys = [];
@@ -6714,14 +6749,17 @@ L.CanvasTileLayer = L.Layer.extend({
 			{
 				var key = keys[i];
 				var tile = this._tiles[key];
-				if (tile.rawDeltas)
+				if (tile.rawDeltas && !tile.current)
 				{
 					totalSize -= tile.rawDeltas.length;
 					if (this._debugDeltas)
 						window.app.console.log('Reclaim delta ' + key + ' memory: ' +
 								       tile.rawDeltas.length + ' bytes');
+					this._reclaimTileCanvasMemory(tile);
 					tile.rawDeltas = null;
-					tile.loaded = false;
+					// force keyframe
+					tile.wireId = 0;
+					tile.invalidFrom = 0;
 				}
 			}
 		}
@@ -6788,51 +6826,62 @@ L.CanvasTileLayer = L.Layer.extend({
 		return ctx;
 	},
 
-	_brgatorgba: function(rawDelta, start, len) {
-		var result = new Uint8ClampedArray(len);
-		var i = start;
-		var resIndex = 0;
-		while (i < start + len) {
-			// premultiplied brga -> unpremultiplied rgba
-			var alpha = rawDelta[i + 3];
-			if (alpha == 255)
-			{
-				result[resIndex++] = rawDelta[i + 2];
-				result[resIndex++] = rawDelta[i + 1];
-				result[resIndex++] = rawDelta[i];
-				result[resIndex++] = 255;
+	_unpremultiply: function(rawDelta) {
+		var len = rawDelta.byteLength / 4;
+		var delta32 = new Uint32Array(rawDelta.buffer, rawDelta.byteOffset, len);
+		var resultu32 = new Uint32Array(len);
+		var resultu8 = new Uint8ClampedArray(resultu32.buffer, resultu32.byteOffset, resultu32.byteLength);
+		for (var i32 = 0; i32 < len; ++i32) {
+			// premultiplied rgba -> unpremultiplied rgba
+			var alpha = delta32[i32] >>> 24;
+			if (alpha === 255) {
+				resultu32[i32] = delta32[i32];
 			}
-			else if (alpha == 0)
-			{
-				result[resIndex++] = 0;
-				result[resIndex++] = 0;
-				result[resIndex++] = 0;
-				result[resIndex++] = 0;
+			else if (alpha !== 0) { // dest can remain at ctored 0 if alpha is 0
+				var i8 = i32 * 4;
+				// forced to do the math
+				resultu8[i8] = Math.ceil(rawDelta[i8] * 255 / alpha);
+				resultu8[i8 + 1] = Math.ceil(rawDelta[i8 + 1] * 255 / alpha);
+				resultu8[i8 + 2] = Math.ceil(rawDelta[i8 + 2] * 255 / alpha);
+				resultu8[i8 + 3] = alpha;
 			}
-			else
-			{
-				result[resIndex++] = Math.ceil(rawDelta[i + 2] * 255 / alpha);
-				result[resIndex++] = Math.ceil(rawDelta[i + 1] * 255 / alpha);
-				result[resIndex++] = Math.ceil(rawDelta[i] * 255 / alpha);
-				result[resIndex++] = alpha;
-			}
-			i += 4;
 		}
-		return result;
+		return resultu8;
 	},
 
-	_applyDelta: function(tile, rawDelta, isKeyframe) {
+	_applyDelta: function(tile, rawDelta, isKeyframe, wireMessage) {
 		if (this._debugDeltas)
 			window.app.console.log('Applying a raw ' + (isKeyframe ? 'keyframe' : 'delta') +
-					       ' of length ' + rawDelta.length + ' hex: ' + hex2string(rawDelta));
+					       ' of length ' + rawDelta.length +
+					       (this._debugDeltasDetail ? (' hex: ' + hex2string(rawDelta)) : ''));
 
-		if (rawDelta.length === 0)
-			return; // that was easy!
+		// Important to recurse & re-constitute from tile.rawDeelts
+		// before appending rawDelta and then applying it again.
+		var ctx = this._ensureContext(tile);
+		if (!ctx) // out of canvas / texture memory.
+			return;
+
+		// if re-creating a canvas from rawDeltas don't update counts
+		if (wireMessage)
+		{
+			if (isKeyframe)
+			{
+				tile.loadCount++;
+				tile.deltaCount = 0;
+				tile.updateCount = 0;
+			}
+			else if (rawDelta.length === 0)
+			{
+				tile.updateCount++;
+				return; // that was easy
+			}
+			else
+				tile.deltaCount++;
+		}
+		// else - re-constituting from tile.rawData
 
 		var traceEvent = app.socket.createCompleteTraceEvent('L.CanvasTileLayer.applyDelta',
 								     { keyFrame: isKeyframe, length: rawDelta.length });
-
-		tile.lastKeyframe = isKeyframe;
 
 		// store the compressed version for later in its current
 		// form as byte arrays, so that we can manage our canvases
@@ -6842,6 +6891,11 @@ L.CanvasTileLayer = L.Layer.extend({
 			if (tile.rawDeltas && tile.rawDeltas != rawDelta) // help the gc?
 				tile.rawDeltas.length = 0;
 			tile.rawDeltas = rawDelta; // overwrite
+		}
+		else if (!tile.rawDeltas)
+		{
+			window.app.console.log('Unusual: attempt to append a delta when we have no keyframe.');
+			return;
 		}
 		else // assume we already have a delta.
 		{
@@ -6868,10 +6922,6 @@ L.CanvasTileLayer = L.Layer.extend({
 		var allDeltas = window.fzstd.decompress(rawDelta);
 
 		var imgData;
-		var ctx = this._ensureContext(tile);
-
-		if (!ctx) // out of canvas / texture memory.
-			return;
 
 		// May have been changed by _ensureContext garbage collection
 		var canvas = tile.canvas;
@@ -6883,8 +6933,8 @@ L.CanvasTileLayer = L.Layer.extend({
 			var delta = allDeltas.subarray(offset);
 
 			// Debugging paranoia: if we get this wrong bad things happen.
-			if ((isKeyframe && delta.length != canvas.width * canvas.height * 4) ||
-			    (!isKeyframe && delta.length == canvas.width * canvas.height * 4))
+			if ((isKeyframe && delta.length < canvas.width * canvas.height * 4) ||
+			    (!isKeyframe && delta.length >= canvas.width * canvas.height * 4))
 			{
 				window.app.console.log('Unusual ' + (isKeyframe ? 'keyframe' : 'delta') +
 						       ' possibly mis-tagged, suspicious size vs. type ' +
@@ -6896,7 +6946,7 @@ L.CanvasTileLayer = L.Layer.extend({
 			{
 				// FIXME: use zstd to de-compress directly into a Uint8ClampedArray
 				len = canvas.width * canvas.height * 4;
-				var pixelArray = this._brgatorgba(delta, 0, len);
+				var pixelArray = this._unpremultiply(delta.subarray(0, len));
 				imgData = new ImageData(pixelArray, canvas.width, canvas.height);
 
 				if (this._debugDeltas)
@@ -6906,6 +6956,8 @@ L.CanvasTileLayer = L.Layer.extend({
 			else
 			{
 				if (!imgData) // no keyframe
+					imgData = tile.imgDataCache;
+				if (!imgData)
 				{
 					if (this._debugDeltas)
 						window.app.console.log('Fetch canvas contents');
@@ -6925,8 +6977,12 @@ L.CanvasTileLayer = L.Layer.extend({
 			offset += len;
 		}
 
-	        if (imgData)
+		if (imgData)
+		{
+			// hold onto the original imgData for reuse in the no keyframe case
+			tile.imgDataCache = imgData;
 			ctx.putImageData(imgData, 0, 0);
+		}
 
 		if (traceEvent)
 			traceEvent.finish();
@@ -6988,7 +7044,9 @@ L.CanvasTileLayer = L.Layer.extend({
 							       ' at pos ' + destCol + ', ' + destRow + ' into delta at byte: ' + offset);
 				i += 4;
 				span *= 4;
-				var pixelData = this._brgatorgba(delta, i, span);
+				// copy so this is suitably aligned for a Uint32Array view
+				var tmpu8 = new Uint8Array(delta.subarray(i, i + span));
+				var pixelData = this._unpremultiply(tmpu8);
 				// imgData.data[offset + 1] = 256; // debug - greener start
 				for (var j = 0; j < span; ++j)
 					imgData.data[offset++] = pixelData[j];
@@ -7007,6 +7065,17 @@ L.CanvasTileLayer = L.Layer.extend({
 		}
 
 		return i;
+	},
+
+	// Update debug overlay for a tile
+	_showDebugForTile: function(key) {
+		if (!this._debug)
+			return;
+
+		var tile = this._tiles[key];
+		tile._debugTime = this._debugGetTimeArray();
+
+		this._debugShowTileData();
 	},
 
 	_onTileMsg: function (textMsg, img) {
@@ -7032,87 +7101,78 @@ L.CanvasTileLayer = L.Layer.extend({
 		var tile = this._tiles[key];
 
 		if (!tile)
-			tile = this.createTile(coords, key);
+			tile = this.createTile(coords, key, tileMsgObj.wireId);
+
+		tile.viewId = tileMsgObj.nviewid;
+		// update monotonic timestamp
+		tile.wireId = +tileMsgObj.wireId;
+		if (tile.invalidFrom == tile.wireId)
+			window.app.console.debug('Nasty - updated wireId matches old one');
+
+		var hasContent = true;
+
+		// obscure case: we could have garbage collected the
+		// keyframe content in JS but coolwsd still thinks we have
+		// it and now we just have a delta with nothing to apply
+		// it to; if so, mark it bad to re-fetch.
+		if (img && !img.isKeyframe && !tile.hasKeyframe())
+		{
+			window.app.console.debug('Unusual: Delta sent - but we have no keyframe for ' + key);
+			// force keyframe
+			tile.wireId = 0;
+			tile.invalidFrom = 0;
+			tile.gcErrors++;
+
+			// queue a later fetch of this and any other
+			// rogue tiles in this state
+			this._fetchKeyframeQueue.push(coords);
+
+			hasContent = false;
+		}
 
 		if (this._debug) {
-			if (tile._debugLoadTile === undefined) {
-				tile._debugLoadTile = 0;
-				tile._debugLoadDelta = 0;
-				tile._debugInvalidateCount = 0;
-			}
-			if (img.rawData && !img.isKeyframe)
+			if (!img)
 			{
-				tile._debugLoadDelta++;
+				tile.updateCount++;
+				this._debugUpdates++;
+			}
+			else if (img.rawData && !img.isKeyframe)
 				this._debugLoadDelta++;
-			}
-			else
-			{
-				tile._debugLoadTile++;
+			else if (img.rawData)
 				this._debugLoadTile++;
-			}
-
-			if (!tile._debugPopup) {
-				var tileBound = this._keyToBounds(key);
-				tile._debugPopup = L.popup({ className: 'debug', offset: new L.Point(0, 0), autoPan: false, closeButton: false, closeOnClick: false })
-					.setLatLng(new L.LatLng(tileBound.getSouth(), tileBound.getWest() + (tileBound.getEast() - tileBound.getWest()) / 5));
-				this._debugInfo.addLayer(tile._debugPopup);
-				if (this._debugTiles[key]) {
-					this._debugInfo.removeLayer(this._debugTiles[key]);
-				}
-				tile._debugTile = L.rectangle(tileBound, { color: 'blue', weight: 1, fillOpacity: 0, pointerEvents: 'none' });
-				this._debugTiles[key] = tile._debugTile;
-				tile._debugTime = this._debugGetTimeArray();
-				this._debugInfo.addLayer(tile._debugTile);
-			}
-
-			var msg = 'requested: ' + this._tiles[key]._debugInvalidateCount + '<br>rec-tiles: ' + this._tiles[key]._debugLoadTile + '<br>recv-delta: ' + this._tiles[key]._debugLoadDelta;
-			if (tile._debugTime.date !== 0)
-				msg += '<br>' + this._debugSetTimes(tile._debugTime, +new Date() - tile._debugTime.date).replace(/, /g, '<br>');
-			msg += '<br>nviewid: ' + tileMsgObj.nviewid;
-			if (tile.rawDeltas)
-				msg += '<br>rawdeltas: ' + tile.rawDeltas.length;
-			var node = document.createElement('p');
-			node.innerHTML = msg;
-			tile._debugPopup.setHTMLContent(node);
-
-			if (tile._debugTile) // deltas in yellow
-				tile._debugTile.setStyle({ fillOpacity: tile.lastKeyframe ? 0 : 0.1, fillColor: 'yellow' });
-
-			this._debugShowTileData();
 		}
-
-		tile.lastKeyframe = false;
-
-		if (this._tiles[key]._invalidCount > 0)
-			this._tiles[key]._invalidCount -= 1;
-
-		tile.wireId = tileMsgObj.wireId;
-
-/*		if (this._map._canvasDevicePixelGrid)
-		{
-			// FIXME: render this onto the canvas with hairlines (?)
-			// browser/test/pixel-test.png - debugging pixel alignment.
-			tile.el.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH5QEIChoQ0oROpwAAAB1pVFh0Q29tbWVudAAAAAAAQ3JlYXRlZCB3aXRoIEdJTVBkLmUHAAACfklEQVR42u3dO67CQBBFwbnI+9/yJbCQLDIkPsZdFRAQjjiv3S8YZ63VNsl6aLvgop5+6vFzZ3QP/uQz2c0RIAAQAAzcASwAmAAgABAACAAEAAIAAYAAQAAgABAACAAEAAIAAYAAQAAgABAACADGBnC8iQ5MABAACAB+zsVYjLZ9dOvd3zzg/QOYADByB/BvUCzBIAAQAFiCwQQAAYAAQAAgABAACAAEAAIAAYAAQAAgABAACAAEAAIAAYAAQAAwIgAXb2ECgABAAPDaI7SLsZhs+79kvX8AEwDsAM8DASzBIAAQAFiCwQQAAYAAQAAgABAAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAI4LSSOAQBgABAAPDVR9C2ToGxNkfww623bZL98/ilUzIBwA4wbCAgABAACAAswWACgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAAAjAESAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgAPiaJAEAAIAB48yNWW6fAWJsj4LRbb9sk++fxSxMA7AAMGwgCAAGAAMASDCYACAAEAAIAAYAAQAAgABAACAAEAAIAASAAR4AAQAAgABAACAAEANeW9e675sAEAAGAAODUO4AFgMnu7t9h2ahA0pgAAAAASUVORK5CYII=';
-		}
-		else */
-		this._applyDelta(tile, img.rawData, img.isKeyframe);
-		this._tileReady(coords);
+		this._showDebugForTile(key);
 
 		L.Log.log(textMsg, 'INCOMING', key);
+
+		// updates don't need more chattiness with a tileprocessed
+		if (hasContent)
+		{
+			this._applyDelta(tile, img.rawData, img.isKeyframe, true);
+			this._tileReady(coords);
+		}
 
 		// Queue acknowledgment, that the tile message arrived
 		var mode = (tileMsgObj.mode !== undefined) ? tileMsgObj.mode : 0;
 		var tileID = tileMsgObj.part + ':' + mode + ':' + tileMsgObj.x + ':' + tileMsgObj.y + ':'
-			+ tileMsgObj.tileWidth + ':' + tileMsgObj.tileHeight + ':' + tileMsgObj.nviewid;
+		    + tileMsgObj.tileWidth + ':' + tileMsgObj.tileHeight + ':' + tileMsgObj.nviewid;
 		this._queuedProcessed.push(tileID);
 	},
 
 	_sendProcessedResponse: function() {
 		var toSend = this._queuedProcessed;
 		this._queuedProcessed = [];
-		// FIXME: new multi-tile-processed message.
-		for (var i = 0; i < toSend.length; i++) {
-			app.socket.sendMessage('tileprocessed tile=' + toSend[i]);
+		if (toSend.length > 0) {
+			var msg = 'tileprocessed tile=' + toSend[0];
+			for (var i = 1; i < toSend.length; ++i)
+				msg += ',' + toSend[i];
+			app.socket.sendMessage(msg);
+		}
+		if (this._fetchKeyframeQueue.length > 0)
+		{
+			window.app.console.warn('re-fetching prematurely GCd keyframes');
+			this._sendTileCombineRequest(this._fetchKeyframeQueue);
+			this._fetchKeyframeQueue = [];
 		}
 	},
 
@@ -7211,7 +7271,7 @@ L.TilesPreFetcher = L.Class.extend({
 		if (app.file.fileBasedView && this._docLayer)
 			this._docLayer._updateFileBasedView();
 
-		if (this._docLayer._emptyTilesCount > 0 || !this._map || !this._docLayer) {
+		if (this._docLayer._emptyTilesCount > 0 || !this._map || !this._docLayer || !this._canonicalIdInitialized) {
 			return;
 		}
 
@@ -7391,7 +7451,7 @@ L.TilesPreFetcher = L.Class.extend({
 
 					if (visitedTiles[key] ||
 					    !this._docLayer._isValidTile(coords) ||
-					    this._docLayer._tileHasContent(key))
+					    !this._docLayer._tileNeedsFetch(key))
 						continue;
 
 					if (tilesToFetch > 0) {

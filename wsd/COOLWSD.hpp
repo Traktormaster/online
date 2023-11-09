@@ -35,6 +35,7 @@ class ChildProcess;
 class TraceFileWriter;
 class DocumentBroker;
 class ClipboardCache;
+class FileServerRequestHandler;
 
 std::shared_ptr<ChildProcess> getNewChild_Blocks(unsigned mobileAppDocId);
 
@@ -58,7 +59,6 @@ public:
     {
         LOG_INF(_name << " ctor [" << _pid << "].");
     }
-
 
     WSProcess(WSProcess&& other) = delete;
 
@@ -195,13 +195,13 @@ public:
 
 protected:
     std::shared_ptr<WebSocketHandler> getWSHandler() const { return _ws; }
-    std::shared_ptr<Socket> getSocket() const { return _socket; };
+    std::shared_ptr<StreamSocket> getSocket() const { return _socket; };
 
 private:
     std::string _name;
     std::atomic<pid_t> _pid; //< The process-id, which can be access from different threads.
     std::shared_ptr<WebSocketHandler> _ws;
-    std::shared_ptr<Socket> _socket;
+    std::shared_ptr<StreamSocket> _socket;
 };
 
 #if !MOBILEAPP
@@ -249,6 +249,7 @@ public:
     static bool AdminEnabled;
     static bool UnattendedRun; //< True when run from an unattended test, not interactive.
     static bool SignalParent;
+    static bool UseEnvVarOptions;
     static std::string RouteToken;
 #if ENABLE_DEBUG
     static bool SingleKit;
@@ -286,6 +287,9 @@ public:
     static std::unique_ptr<TraceFileWriter> TraceDumper;
 #if !MOBILEAPP
     static std::unique_ptr<ClipboardCache> SavedClipboards;
+
+    /// The file request handler used for file-serving.
+    static std::unique_ptr<FileServerRequestHandler> FileRequestHandler;
 #endif
 
     static std::unordered_set<std::string> EditFileExtensions;
@@ -487,6 +491,8 @@ public:
         return FileUtil::anonymizeUsername(username);
     }
     static void alertAllUsersInternal(const std::string& msg);
+    static void alertUserInternal(const std::string& dockey, const std::string& msg);
+
 
 #if ENABLE_DEBUG
     /// get correct server URL with protocol + port number for this running server
@@ -516,6 +522,7 @@ protected:
 
     void defineOptions(Poco::Util::OptionSet& options) override;
     void handleOption(const std::string& name, const std::string& value) override;
+    void initializeEnvOptions();
     int main(const std::vector<std::string>& args) override;
 
     /// Handle various global static destructors.

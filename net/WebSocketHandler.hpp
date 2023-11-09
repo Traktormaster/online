@@ -312,7 +312,7 @@ private:
             headerLen += 8;
         }
 
-        unsigned char *data, *mask = nullptr;
+        unsigned char *mask = nullptr;
 
         if (hasMask)
         {
@@ -320,7 +320,7 @@ private:
             headerLen += 4;
         }
 
-        if (payloadLen + headerLen > len)
+        if (headerLen > len || payloadLen > len - headerLen)
         { // partial read wait for more data.
             LOG_TRC("Still incomplete WebSocket frame, have "
                     << len << " bytes, frame is " << payloadLen + headerLen << " bytes");
@@ -338,7 +338,7 @@ private:
                 << len << " bytes: "
                 << Util::stringifyHexLine(socket->getInBuffer(), 0, std::min((size_t)32, len)));
 
-        data = p + headerLen;
+        unsigned char *data = p + headerLen;
 
         if (isControlFrame(code))
         {
@@ -778,10 +778,29 @@ protected:
             size_t offset = Util::isValidUtf8((unsigned char*)data, len);
             if (offset < len)
             {
-                std::string raw(data, len);
+                std::string hex, raw;
+                if (len < 256)
+                {
+                    raw = std::string(data, len);
+                    hex = "whole string:" + Util::dumpHex(raw);
+                }
+                else
+                {
+                    // 64 bytes before & after ...
+                    size_t cropstart, croplen;
+                    if (offset < 64)
+                        cropstart = 0;
+                    else
+                        cropstart = offset - 64;
+                    croplen = std::min<size_t>(len - cropstart, 128);
+                    assert (cropstart + croplen <= len);
+                    raw = std::string(data + cropstart, croplen);
+                    hex = "msg: "+ COOLProtocol::getAbbreviatedMessage(data, len) +
+                        " string region error at byte " + std::to_string(offset - cropstart) + ": " + Util::dumpHex(raw);
+                };
                 std::cerr << "attempting to send invalid UTF-8 message '" << raw << "' "
                           << " error at offset " << std::hex << "0x" << offset << std::dec
-                          << " bytes, string: " << Util::dumpHex(raw) << "\n";
+                          << " bytes, " << hex << "\n";
                 assert("invalid utf-8 - check Message::detectType()" && false);
             }
         }

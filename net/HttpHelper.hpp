@@ -10,33 +10,26 @@
 #include <memory>
 #include <string>
 
-namespace Poco
-{
-    namespace Net
-    {
-        class HTTPResponse;
-    }
-}
+#include <HttpRequest.hpp>
 
 class StreamSocket;
 
 namespace HttpHelper
 {
 /// Write headers and body for an error response.
-void sendError(int errorCode, const std::shared_ptr<StreamSocket>& socket,
+void sendError(http::StatusCode errorCode, const std::shared_ptr<StreamSocket>& socket,
                const std::string& body = std::string(),
                const std::string& extraHeader = std::string());
 
 /// Write headers and body for an error response. Afterwards, shutdown the socket.
-void sendErrorAndShutdown(int errorCode, const std::shared_ptr<StreamSocket>& socket,
+void sendErrorAndShutdown(http::StatusCode errorCode, const std::shared_ptr<StreamSocket>& socket,
                           const std::string& body = std::string(),
                           const std::string& extraHeader = std::string());
 
 /// Sends file as HTTP response and shutdown the socket.
 void sendFileAndShutdown(const std::shared_ptr<StreamSocket>& socket, const std::string& path,
-                         const std::string& mediaType,
-                         Poco::Net::HTTPResponse* optResponse = nullptr, bool noCache = false,
-                         bool deflate = false, const bool headerOnly = false);
+                         http::Response& response,
+                         bool noCache = false, bool deflate = false, const bool headerOnly = false);
 
 } // namespace HttpHelper
 

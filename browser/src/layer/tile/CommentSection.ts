@@ -55,6 +55,9 @@ export class Comment extends CanvasSectionObject {
 		this.sectionProperties.margin = options.margin ? options.margin : [40, 40];
 		this.sectionProperties.noMenu = options.noMenu ? options.noMenu : false;
 
+		if (data.parent === undefined)
+			data.parent = '0';
+
 		this.sectionProperties.data = data;
 		this.sectionProperties.annotationMarker = null;
 		this.sectionProperties.wrapper = null;
@@ -93,6 +96,7 @@ export class Comment extends CanvasSectionObject {
 		this.name = data.id === 'new' ? 'new comment': 'comment ' + data.id;
 
 		this.sectionProperties.isRemoved = false;
+		this.sectionProperties.children = []; // This is used for Writer comments. There is parent / child relationship between comments in Writer files.
 
 		this.convertRectanglesToCoreCoordinates(); // Convert rectangle coordiantes into core pixels on initialization.
 	}
@@ -110,14 +114,19 @@ export class Comment extends CanvasSectionObject {
 		var button = L.DomUtil.create('div', 'annotation-btns-container', this.sectionProperties.nodeModify);
 		L.DomEvent.on(this.sectionProperties.nodeModifyText, 'blur', this.onLostFocus, this);
 		L.DomEvent.on(this.sectionProperties.nodeReplyText, 'blur', this.onLostFocusReply, this);
+		L.DomEvent.on(this.sectionProperties.nodeModifyText, 'input', this.textAreaInput, this);
+		L.DomEvent.on(this.sectionProperties.nodeReplyText, 'input', this.textAreaInput, this);
 		this.createButton(button, 'annotation-cancel-' + this.sectionProperties.data.id, 'annotation-button button-secondary', _('Cancel'), this.onCancelClick);
-		this.createButton(button, 'annotation-save-' + this.sectionProperties.data.id, 'annotation-button button-primary',_('Save'), this.onSaveComment);
+		this.createButton(button, 'annotation-save-' + this.sectionProperties.data.id, 'annotation-button button-primary',_('Save'), this.handleSaveCommentButton);
 		button = L.DomUtil.create('div', '', this.sectionProperties.nodeReply);
 		this.createButton(button, 'annotation-cancel-reply-' + this.sectionProperties.data.id, 'annotation-button button-secondary', _('Cancel'), this.onCancelClick);
-		this.createButton(button, 'annotation-reply-' + this.sectionProperties.data.id, 'annotation-button button-primary', _('Reply'), this.onReplyClick);
+		this.createButton(button, 'annotation-reply-' + this.sectionProperties.data.id, 'annotation-button button-primary', _('Reply'), this.handleReplyCommentButton);
 		L.DomEvent.disableScrollPropagation(this.sectionProperties.container);
 
-		this.sectionProperties.container.style.visibility = 'hidden';
+		// Since this is a late called function, if the width is enough, we shouldn't collapse the comments.
+		if (this.sectionProperties.docLayer._docType !== 'text' || this.sectionProperties.commentListSection.isCollapsed === true)
+			this.sectionProperties.container.style.visibility = 'hidden';
+
 		this.sectionProperties.nodeModify.style.display = 'none';
 		this.sectionProperties.nodeReply.style.display = 'none';
 
@@ -232,6 +241,7 @@ export class Comment extends CanvasSectionObject {
 		this.sectionProperties.authorAvatartdImg = tdImg;
 		this.sectionProperties.contentAuthor = L.DomUtil.create('div', 'cool-annotation-content-author', tdAuthor);
 		this.sectionProperties.contentDate = L.DomUtil.create('div', 'cool-annotation-date', tdAuthor);
+		this.sectionProperties.autoSave = L.DomUtil.create('div', 'cool-annotation-autosavelabel', tdAuthor);
 	}
 
 	private createMenu (): void {
@@ -292,6 +302,10 @@ export class Comment extends CanvasSectionObject {
 
 	public updateResolvedField (state: string): void {
 		this.sectionProperties.resolvedTextElement.innerText = state === 'true' ? _('Resolved') : '';
+	}
+
+	private textAreaInput (): void {
+		this.sectionProperties.autoSave.innerText = '';
 	}
 
 	private updateContent (): void {
@@ -368,10 +382,10 @@ export class Comment extends CanvasSectionObject {
 		}
 		else if (this.sectionProperties.data.cellPos && this.sectionProperties.docLayer._docType === 'spreadsheet') {
 			var ratio: number = (app.tile.size.pixels[0] / app.tile.size.twips[0]);
-			const sizeX = this.sectionProperties.data.cellPos[2];
-			this.size = [Math.round(sizeX * ratio), Math.round(this.sectionProperties.data.cellPos[3] * ratio)];
+			this.size = this.calcCellSize();
 			let startX = this.sectionProperties.data.cellPos[0];
 			if (this.isCalcRTL()) { // Mirroring is done in setPosition
+				const sizeX = this.sectionProperties.data.cellPos[2];
 				startX += sizeX;  // but adjust for width of the cell.
 			}
 			this.showSection = true;
@@ -383,14 +397,14 @@ export class Comment extends CanvasSectionObject {
 			splitPosCore.x *= app.dpiScale;
 			splitPosCore.y *= app.dpiScale;
 
-			if (position[0] <= splitPosCore.x)
+			if (position[0] < splitPosCore.x)
 				position[0] += this.documentTopLeft[0];
-			else if (position[0] - this.documentTopLeft[0] <= splitPosCore.x)
+			else if (position[0] - this.documentTopLeft[0] < splitPosCore.x)
 				this.showSection = false;
 
-			if (position[1] <= splitPosCore.y)
+			if (position[1] < splitPosCore.y)
 				position[1] += this.documentTopLeft[1];
-			else if (position[1] - this.documentTopLeft[1] <= splitPosCore.y)
+			else if (position[1] - this.documentTopLeft[1] < splitPosCore.y)
 				this.showSection = false;
 
 			this.setPosition(position[0], position[1]);
@@ -768,6 +782,12 @@ export class Comment extends CanvasSectionObject {
 		}
 	}
 
+	public handleReplyCommentButton (e: any): void {
+		app.view.commentAutoSave = null;
+		this.textAreaInput();
+		this.onReplyClick(e);
+	}
+
 	// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 	public onReplyClick (e: any): void {
 		L.DomEvent.stopPropagation(e);
@@ -776,17 +796,25 @@ export class Comment extends CanvasSectionObject {
 			this.sectionProperties.commentListSection.saveReply(this);
 		} else {
 			this.sectionProperties.data.reply = this.sectionProperties.nodeReplyText.value;
-			// Assigning an empty string to .innerHTML property in some browsers will convert it to 'null'
-			// While in browsers like Chrome and Firefox, a null value is automatically converted to ''
-			// Better to assign '' here instead of null to keep the behavior same for all
-			this.sectionProperties.nodeReplyText.value = '';
-			this.show();
+			if (!app.view.commentAutoSave) {
+				// Assigning an empty string to .innerHTML property in some browsers will convert it to 'null'
+				// While in browsers like Chrome and Firefox, a null value is automatically converted to ''
+				// Better to assign '' here instead of null to keep the behavior same for all
+				this.sectionProperties.nodeReplyText.value = '';
+				this.show();
+			}
 			this.sectionProperties.commentListSection.saveReply(this);
 		}
 	}
 
 	// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 	public onCancelClick (e: any): void {
+		if (app.view.commentAutoSave)
+			return;
+		if (app.view.commentAutoAdded) {
+			this.sectionProperties.commentListSection.remove(this.sectionProperties.data.id);
+			this.onRemove();
+		}
 		if (e)
 			L.DomEvent.stopPropagation(e);
 		this.sectionProperties.nodeModifyText.value = this.sectionProperties.contentText.origText;
@@ -796,19 +824,30 @@ export class Comment extends CanvasSectionObject {
 		this.sectionProperties.commentListSection.cancel(this);
 	}
 
+	public handleSaveCommentButton (e: any): void {
+		app.view.commentAutoSave = null;
+		this.textAreaInput();
+		this.onSaveComment(e);
+	}
+
 	// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 	public onSaveComment (e: any): void {
 		L.DomEvent.stopPropagation(e);
 		this.sectionProperties.data.text = this.sectionProperties.nodeModifyText.value;
 		this.updateContent();
-		this.show();
+		if (!app.view.commentAutoSave)
+			this.show();
+
 		this.sectionProperties.commentListSection.save(this);
 	}
 
 	// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 	public onLostFocus (e: any): void {
 		if (!this.sectionProperties.isRemoved) {
-			$(this.sectionProperties.container).removeClass('annotation-active reply-annotation-container modify-annotation-container');
+			if (!this.sectionProperties.nodeModifyText.value &&
+				!this.sectionProperties.contentText.origText)
+				return;
+			app.view.commentAutoSave = this;
 			if (this.sectionProperties.contentText.origText !== this.sectionProperties.nodeModifyText.value) {
 				this.onSaveComment(e);
 			}
@@ -830,7 +869,9 @@ export class Comment extends CanvasSectionObject {
 
 	// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 	public onLostFocusReply (e: any): void {
+
 		if (this.sectionProperties.nodeReplyText.value !== '') {
+			app.view.commentAutoSave = this;
 			this.onReplyClick(e);
 		}
 		else {
@@ -868,6 +909,18 @@ export class Comment extends CanvasSectionObject {
 	public isEdit (): boolean {
 		return (this.sectionProperties.nodeModify && this.sectionProperties.nodeModify.style.display !== 'none') ||
 		       (this.sectionProperties.nodeReply && this.sectionProperties.nodeReply.style.display !== 'none');
+	}
+
+	public isAnyEdit (): boolean {
+		var commentList = app.sectionContainer.getSectionWithName(L.CSections.CommentList.name).sectionProperties.commentList;
+		for (var i in commentList) {
+			var modifyNode = commentList[i].sectionProperties.nodeModify;
+			var replyNode = commentList[i].sectionProperties.nodeReply;
+			if ((modifyNode && modifyNode.style.display !== 'none') ||
+				(replyNode && replyNode.style.display !== 'none'))
+				return true;
+		}
+		return false;
 	}
 
 	// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
@@ -993,22 +1046,40 @@ export class Comment extends CanvasSectionObject {
 	}
 
 	public onDraw (): void {
-		if (this.sectionProperties.docLayer._docType === 'text' && this.sectionProperties.showSelectedCoordinate) {
-			var rectangles: Array<any> = this.sectionProperties.data.rectangles;
-			if (rectangles) {
-				this.context.fillStyle = this.sectionProperties.usedTextColor;
-				this.context.globalAlpha = 0.25;
+		if (this.sectionProperties.showSelectedCoordinate) {
+			if (this.sectionProperties.docLayer._docType === 'text') {
+				var rectangles: Array<any> = this.sectionProperties.data.rectangles;
+				if (rectangles) {
+					this.context.fillStyle = this.sectionProperties.usedTextColor;
+					this.context.globalAlpha = 0.25;
 
-				for (var i: number = 0; i < this.sectionProperties.data.rectangles.length;i ++) {
-					var x = rectangles[i][0] - this.myTopLeft[0];
-					var y = rectangles[i][1] - this.myTopLeft[1];
-					var w = rectangles[i][2] > 3 ? rectangles[i][2]: 3;
-					var h = rectangles[i][3];
+					for (var i: number = 0; i < this.sectionProperties.data.rectangles.length;i ++) {
+						var x = rectangles[i][0] - this.myTopLeft[0];
+						var y = rectangles[i][1] - this.myTopLeft[1];
+						var w = rectangles[i][2] > 3 ? rectangles[i][2]: 3;
+						var h = rectangles[i][3];
 
-					this.context.fillRect(x, y, w , h);
+						this.context.fillRect(x, y, w , h);
+					}
+
+					this.context.globalAlpha = 1;
 				}
+			}
+			else if (this.sectionProperties.docLayer._docType === 'spreadsheet' &&
+				 parseInt(this.sectionProperties.data.tab) === this.sectionProperties.docLayer._selectedPart) {
 
-				this.context.globalAlpha = 1;
+				var cellSize = this.calcCellSize();
+				if (cellSize[0] !== 0 && cellSize[1] !== 0) { // don't draw notes in hidden cells
+					// For calc comments (aka postits) draw the same sort of square as ScOutputData::DrawNoteMarks
+					// does for offline
+					var margin = 3;
+					var squareDim = 6;
+					// this.size may currently have an artifically wide size if mouseEnter without moveLeave seen
+					// so fetch the real size
+					var x = this.isCalcRTL() ? margin : cellSize[0] - (margin + squareDim);
+					this.context.fillStyle = '#FF0000';
+					this.context.fillRect(x, 0, squareDim, squareDim);
+				}
 			}
 		}
 	}
@@ -1049,6 +1120,11 @@ export class Comment extends CanvasSectionObject {
 		}
 	}
 
+	public calcCellSize (): number[] {
+		var ratio: number = (app.tile.size.pixels[0] / app.tile.size.twips[0]);
+		return [Math.round((this.sectionProperties.data.cellPos[2]) * ratio), Math.round((this.sectionProperties.data.cellPos[3]) * ratio)];
+	}
+
 	public onMouseEnter (): void {
 		if (this.calcContinueWithMouseEvent()) {
 			// When mouse is above this section, comment's HTML element will be shown.
@@ -1077,8 +1153,7 @@ export class Comment extends CanvasSectionObject {
 		if (this.calcContinueWithMouseEvent()) {
 			if (parseInt(this.sectionProperties.data.tab) === this.sectionProperties.docLayer._selectedPart) {
 				// Revert the changes we did on "onMouseEnter" event.
-				var ratio: number = (app.tile.size.pixels[0] / app.tile.size.twips[0]);
-				this.size = [Math.round((this.sectionProperties.data.cellPos[2]) * ratio), Math.round((this.sectionProperties.data.cellPos[3]) * ratio)];
+				this.size = this.calcCellSize();
 				if (point) {
 					this.hide();
 				}
@@ -1124,7 +1199,13 @@ export class Comment extends CanvasSectionObject {
 	}
 
 	public setCollapsed(): void {
+		var selectedComment = this.sectionProperties.commentListSection.sectionProperties.selectedComment;
+		if (app.view.commentAutoSave
+			|| (selectedComment && selectedComment.isEdit()))
+			return;
 		this.isCollapsed = true;
+
+		this.show();
 
 		if (this.isRootComment() || this.sectionProperties.docLayer._docType === 'presentation' || this.sectionProperties.docLayer._docType === 'drawing') {
 			this.sectionProperties.container.style.visibility = 'hidden';

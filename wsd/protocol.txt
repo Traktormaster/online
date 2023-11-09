@@ -78,10 +78,10 @@ TRACEEVENT name=<name> ph=<letter> ts=<timestamp> <more parameters>... [ args=<J
     between the beginning of the thing being timed and the time when
     the 'X' message was emitted, also in microseconds.
 
-tileprocessed tile=<tileid>
+tileprocessed tile=<tileid1,tileid2,...>
 
     Previously sent tile (server -> client) arrived and processed by the client.
-    Tileid has the next structure : <selected part>:<tile x coord>:<tile y coord>:<tile width in twips>:<tile height in twips>
+    Each tileid has the next structure : <selected part>:<tile x coord>:<tile y coord>:<tile width in twips>:<tile height in twips>
 
 downloadas name=<fileName> id=<id> format=<document format> options=<SkipImages, etc>
 
@@ -180,11 +180,6 @@ renderfont font=<font> char=<characters>
     The font parameter is URL encoded
     The char parameter is URL encoded
 
-requestloksession
-
-    requests the initialization of a LOK process in an attempt to predict the user's
-    interaction with the document
-
 resetselection
 
 saveas url=<url> format=<format> options=<options>
@@ -223,16 +218,15 @@ status
 
 styles
 
-tile part=<partNumber> width=<width> height=<height> tileposx=<xpos> tileposy=<ypos> tilewidth=<tileWidth> tileheight=<tileHeight> [timestamp=<time>] [id=<id> broadcast=<yesOrNo>] [oldwid=<wireId>]
+tile part=<partNumber> width=<width> height=<height> tileposx=<xpos> tileposy=<ypos> tilewidth=<tileWidth> tileheight=<tileHeight> [timestamp=<time>] [id=<id>] [oldwid=<wireId>]
 
-    Parameters are numbers except broadcast which is 'yes' or 'no' and
-    wireId which is an opaque string identifier unique to this tile.
+    Parameters are numbers except wireId which is an opaque string
+    identifier unique to this tile.
 
-    Note: id must be echoed back in the response verbatim. It and the
-    following parameter, broadcast, are used when rendering slide
-    previews of presentation documents, and not for anything else. It
-    is only useful to JS part and will break it if not returned in
-    the response.
+    Note: id must be echoed back in the response verbatim. It is used
+    when rendering slide previews of presentation documents, and not
+    for anything else. It is only useful to JS part and will break it
+    if not returned in the response.
 
 tilecombine <parameters>
 
@@ -240,6 +234,9 @@ tilecombine <parameters>
     parameters 'tileposx', 'tileposy' and 'oldwid are
     comma-separated lists, and the number of elements in each must be
     same.
+
+    if oldwid=0 this forces returning from the previous keyframe
+    for this tile - suitable for force-refreshing the data.
 
 dialog <command>
 
@@ -463,14 +460,13 @@ getchildid: id=<id>
 
     Returns the child id
 
-invalidatetiles: part=<partNumber> x=<x> y=<y> width=<width> height=<height>
+invalidatetiles: part=<partNumber> x=<x> y=<y> width=<width> height=<height> wid=<wid>
 
     All parameters are numbers. Tells the client to invalidate any
     cached tiles for the document area specified (in twips), at any
     zoom level.
 
-invalidatetiles: EMPTY
-invalidatetiles: EMPTY, <partNumber>
+invalidatetiles: EMPTY, <partNumber>, <mode>, wid=<wid>
 
     Tells the client to invalidate all cached tiles.
 
@@ -530,6 +526,7 @@ delta: part=<partNumber> width=<width> height=<height> tileposx=<xpos> tileposy=
     an incremental patch on top of a previous tile.
 
 commandresult: <payload>
+
     This is used to acknowledge the commands from the client.
     <payload> is { command: <command name>, success: 'true' }
 
@@ -685,6 +682,7 @@ contentcontrol: <JSON>
         - date - boolean to indicate date content control
         - items - array of items for dropdown
 
+canonicalidchange: viewid=<id> canonicalid=<id> viewrenderedstate=<Light|Dark|Empty>
 
 child -> parent
 ===============
@@ -898,6 +896,14 @@ kill <pid>
      <pid> process id of the document to kill. All sessions of document would be
      killed. There is no way yet to kill individual sessions.
 
+wopiSrcMap
+
+    get map of wopiSrc<->routeToken
+
+verifyauth jwt=<jwt_token> id=<unique_identifier>
+
+    verify jwt token without shutting down the socket connection, works only with monitor
+
 admin -> client
 ===============
 
@@ -905,17 +911,18 @@ Commands marked with [*] are notifications that are delivered only if client is
 subscribed to these commands using `subscribe` (see client->admin
 section). Others are just response messages to some client command.
 
-[*] adddoc <pid> <filename> <viewid> <memory consumed>
+[*] adddoc <pid> <filename> <sessionid> <username> <userid> <memory consumed> <wopiHost> <isViewReadOnly> <wopiSrc>
 
     <pid> process id hosting the document
     <filename> URL encoded name of the file
-    <viewid> string identifying the view of this document
+    <sessionid> string identifying the view of this document
     <memory consumed> RSS of <pid> in kilobytes
+    <wopihost> storage host on which document exist
 
-[*] rmdoc <pid> <viewid>
+[*] rmdoc <pid> <sessionid>
 
     <pid> process id hosting the document
-    <viewid> view which was closed
+    <sessionid> view which was closed
 
 [*] mem_stats <memory consumed>
 
@@ -943,14 +950,27 @@ section). Others are just response messages to some client command.
 
     note: This might get additional parameters in future
 
+[*] wopiSrcMap <JSON string>
+
+    wopiSrcMap:
+    {
+        "routeToken": "abcpqr"
+        "wopiSrc" : ["wopiSrc1", "wopiSrc2"]
+    }
+    <JSON string> contains the map wopiSrc<->routeToken
+
 InvalidAuthToken
 
-    This is sent when invalid auth token is provided in 'auth' command. See
+    This is sent when invalid auth token is provided in 'auth' and 'verifyauth' command. See
     above.
 
 NotAuthenticated
 
     When client sends an admin command that requires authentication.
+
+ValidAuthToken
+
+    This is sent when valid token is provided in 'verifyauth' command. See above
 
 documents <pid> <filename> <number of views> <memory consumed> <elapsed time> <idle time>
 <pid> <filename> ....

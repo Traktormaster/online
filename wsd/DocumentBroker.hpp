@@ -12,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <deque>
 #include <map>
 #include <memory>
@@ -45,6 +46,30 @@ struct LockContext;
 class TileCache;
 class Message;
 
+class UrpHandler : public SimpleSocketHandler
+{
+public:
+    UrpHandler(ChildProcess* process) : _childProcess(process)
+    {
+    }
+    void onConnect(const std::shared_ptr<StreamSocket>& socket) override
+    {
+        _socket = socket;
+        setLogContext(socket->getFD());
+    }
+    void handleIncomingMessage(SocketDisposition& /*disposition*/) override;
+    int getPollEvents(std::chrono::steady_clock::time_point /* now */,
+                      int64_t & /* timeoutMaxMicroS */) override
+    {
+        return POLLIN;
+    }
+    void performWrites(std::size_t /*capacity*/) override {}
+private:
+    // The socket that owns us (we can't own it).
+    std::weak_ptr<StreamSocket> _socket;
+    ChildProcess* _childProcess;
+};
+
 /// A ChildProcess object represents a Kit process that hosts a document and manipulates the
 /// document using the LibreOfficeKit API. It isn't actually a child of the WSD process, but a
 /// grandchild. The comments loosely talk about "child" anyway.
@@ -62,11 +87,38 @@ public:
         , _jailId(jailId)
         , _smapsFD(-1)
     {
+        int urpFromKitFD = socket->getIncomingFD(URPFromKit);
+        int urpToKitFD = socket->getIncomingFD(URPToKit);
+        if (urpFromKitFD != -1 && urpToKitFD != -1)
+        {
+            _urpFromKit = StreamSocket::create<StreamSocket>(std::string(), urpFromKitFD, false, std::make_shared<UrpHandler>(this));
+            _urpToKit = StreamSocket::create<StreamSocket>(std::string(), urpToKitFD, false, std::make_shared<UrpHandler>(this));
+        }
     }
 
     ChildProcess(ChildProcess&& other) = delete;
 
-    virtual ~ChildProcess(){ ::close(_smapsFD); }
+    bool sendUrpMessage(const std::string& message)
+    {
+        if (!_urpToKit)
+            return false;
+        if (message.size() < 4)
+        {
+            LOG_ERR("URP Message too short");
+            return false;
+        }
+        _urpToKit->send(message.data() + 4, message.size() - 4);
+        return true;
+    }
+
+    virtual ~ChildProcess()
+    {
+        if (_urpFromKit)
+            _urpFromKit->shutdown();
+        if (_urpToKit)
+            _urpToKit->shutdown();
+        ::close(_smapsFD);
+    }
 
     const ChildProcess& operator=(ChildProcess&& other) = delete;
 
@@ -79,6 +131,8 @@ public:
 private:
     const std::string _jailId;
     std::weak_ptr<DocumentBroker> _docBroker;
+    std::shared_ptr<StreamSocket> _urpFromKit;
+    std::shared_ptr<StreamSocket> _urpToKit;
     int _smapsFD;
 };
 
@@ -296,7 +350,7 @@ public:
 
     /// Check if uploading is needed, and start uploading.
     /// The current state of uploading must be introspected separately.
-    void checkAndUploadToStorage(const std::shared_ptr<ClientSession>& session);
+    void checkAndUploadToStorage(const std::shared_ptr<ClientSession>& session, bool justSaved);
 
     /// Upload the document to Storage if it needs persisting.
     /// Results are logged and broadcast to users.
@@ -322,7 +376,7 @@ public:
     /// @param dontSaveIfUnmodified when true, save will fail if the document is not modified.
     /// @return true if attempts to save or it also waits
     /// and receives save notification. Otherwise, false.
-    bool autoSave(const bool force, const bool dontSaveIfUnmodified = true);
+    bool autoSave(const bool force, const bool dontSaveIfUnmodified);
 
     /// Saves the document and stops if there was nothing to autosave.
     void autoSaveAndStop(const std::string& reason);
@@ -356,7 +410,7 @@ public:
     void addCallback(const SocketPoll::CallbackFn& fn);
 
     /// Transfer this socket into our polling thread / loop.
-    void addSocketToPoll(const std::shared_ptr<Socket>& socket);
+    void addSocketToPoll(const std::shared_ptr<StreamSocket>& socket);
 
     void alertAllUsers(const std::string& msg);
 
@@ -388,6 +442,7 @@ public:
     void handleTileCombinedRequest(TileCombined& tileCombined, bool forceKeyframe,
                                    const std::shared_ptr<ClientSession>& session);
     void sendRequestedTiles(const std::shared_ptr<ClientSession>& session);
+    void sendTileCombine(const TileCombined& tileCombined);
 
     enum ClipboardRequest {
         CLIP_REQUEST_SET,
@@ -400,14 +455,13 @@ public:
     static bool lookupSendClipboardTag(const std::shared_ptr<StreamSocket> &socket,
                                        const std::string &tag, bool sendError = false);
 
-    void handleMediaRequest(const std::shared_ptr<Socket>& socket, const std::string& tag);
+    void handleMediaRequest(std::string range, const std::shared_ptr<Socket>& socket, const std::string& tag);
 
     /// True if any flag to unload or terminate is set.
     bool isUnloading() const
     {
         return _docState.isMarkedToDestroy() || _stop || _docState.isUnloadRequested() ||
-               _docState.isCloseRequested() || SigUtil::getShutdownRequestFlag() ||
-               SigUtil::getTerminationFlag();
+               _docState.isCloseRequested() || SigUtil::getShutdownRequestFlag();
     }
 
     bool isMarkedToDestroy() const { return _docState.isMarkedToDestroy() || _stop; }
@@ -424,7 +478,7 @@ public:
     void closeDocument(const std::string& reason);
 
     /// Flag that we have been disconnected from the Kit and request unloading.
-    void disconnectedFromKit();
+    void disconnectedFromKit(bool unexpected);
 
     /// Get the PID of the associated child process
     pid_t getPid() const { return _childProcess ? _childProcess->getPid() : 0; }
@@ -497,6 +551,8 @@ public:
     void addEmbeddedMedia(const std::string& id, const std::string& json);
     /// Remove embedded media objects.
     void removeEmbeddedMedia(const std::string& json);
+
+    void onUrpMessage(const char* data, size_t len);
 
 private:
     /// Get the session that can write the document for save / locking / uploading.
@@ -654,7 +710,7 @@ private:
     /// since there are race conditions vis-a-vis user activity while saving.
     bool isPossiblyModified() const
     {
-        if (haveActivityAfterSaveRequest())
+        if (haveModifyActivityAfterSaveRequest())
         {
             // Always assume possible modification when we have
             // user input after sending a .uno:Save, due to racing.
@@ -773,11 +829,14 @@ private:
         /// Returns true iff there is no active request and sufficient
         /// time has elapsed since the last request, including that
         /// more time than half the last request's duration has passed.
-        bool canRequestNow() const
+        /// When unloading, we reduce throttling significantly.
+        bool canRequestNow(bool unloading) const
         {
+            const std::chrono::milliseconds minTimeBetweenRequests =
+                unloading ? _minTimeBetweenRequests / 10 : _minTimeBetweenRequests;
             const auto now = RequestManager::now();
             return !isActive() && std::min(timeSinceLastRequest(now), timeSinceLastResponse(now)) >=
-                                      std::max(_minTimeBetweenRequests, _lastRequestDuration / 2);
+                                      std::max(minTimeBetweenRequests, _lastRequestDuration / 2);
         }
 
         /// Sets the last request's result, either to success or failure.
@@ -860,7 +919,9 @@ private:
             , _idleSaveInterval(idleSaveInterval)
             , _autoSaveInterval(autoSaveInterval)
             , _checkInterval(getCheckInterval(idleSaveInterval, autoSaveInterval))
+            , _savingTimeout(std::chrono::seconds::zero())
             , _lastAutosaveCheckTime(RequestManager::now())
+            , _version(0)
         {
             if (Log::traceEnabled())
             {
@@ -922,11 +983,14 @@ private:
         std::size_t saveFailureCount() const { return _request.lastRequestFailureCount(); }
 
         /// Sets whether the last save was successful or not.
-        void setLastSaveResult(bool success)
+        void setLastSaveResult(bool success, bool newVersion)
         {
-            LOG_DBG("Save " << (success ? "succeeded" : "failed") << " after "
-                            << _request.timeSinceLastRequest());
+            LOG_DBG("Saving version #" << version() + 1 << (success ? " succeeded" : " failed")
+                                       << " after " << _request.timeSinceLastRequest());
             _request.setLastRequestResult(success);
+
+            if (newVersion)
+                ++_version; // Bump the version.
         }
 
         /// Returns the last save request time.
@@ -995,12 +1059,17 @@ private:
             return _request.minTimeBetweenRequests();
         }
 
+        /// Returns the current saved version on disk, since loading.
+        /// 0 for original, as-loaded version.
+        std::size_t version() const { return _version.load(); }
+
         /// True if we aren't saving and the minimum time since last save has elapsed.
-        bool canSaveNow() const { return _request.canRequestNow(); }
+        bool canSaveNow(bool unloading) const { return _request.canRequestNow(unloading); }
 
         void dumpState(std::ostream& os, const std::string& indent = "\n  ") const
         {
             const auto now = std::chrono::steady_clock::now();
+            os << indent << "version: " << version();
             os << indent << "isSaving now: " << std::boolalpha << isSaving();
             os << indent << "idle-save enabled: " << std::boolalpha << isIdleSaveEnabled();
             os << indent << "idle-save interval: " << idleSaveInterval();
@@ -1043,10 +1112,13 @@ private:
         const std::chrono::milliseconds _checkInterval;
 
         /// The maximum time to wait for saving to finish.
-        std::chrono::seconds _savingTimeout{};
+        std::chrono::seconds _savingTimeout;
 
         /// The last autosave check time.
         std::chrono::steady_clock::time_point _lastAutosaveCheckTime;
+
+        /// Current saved file version. Incremented after each successful save.
+        std::atomic_int_fast32_t _version;
     };
 
     /// Represents an upload request.
@@ -1172,7 +1244,7 @@ private:
         }
 
         /// True if we aren't uploading and the minimum time since last upload has elapsed.
-        bool canUploadNow() const { return _request.canRequestNow(); }
+        bool canUploadNow(bool unloading) const { return _request.canRequestNow(unloading); }
 
         void dumpState(std::ostream& os, const std::string& indent = "\n  ") const
         {
@@ -1251,13 +1323,19 @@ private:
                    Upload, //< The document is being uploaded to storage.
         );
 
+        STATE_ENUM(Disconnected,
+                   No, //< No, not disconnected
+                   Normal, //< Yes, normal disconnection
+                   Unexpected, //< Yes, unexpected disconnection from Kit
+        );
+
         DocumentState()
             : _status(Status::None)
             , _activity(Activity::None)
             , _loaded(false)
             , _closeRequested(false)
             , _unloadRequested(false)
-            , _disconnected(false)
+            , _disconnected(Disconnected::No)
             , _interactive(false)
         {
         }
@@ -1311,8 +1389,9 @@ private:
         bool isUnloadRequested() const { return _unloadRequested; }
 
         /// Flag that we are disconnected from the Kit. Irreversible.
-        void setDisconnected() { _disconnected = true; }
-        bool isDisconnected() const { return _disconnected; }
+        void setDisconnected(Disconnected disconnected) { _disconnected = disconnected; }
+        DocumentState::Disconnected disconnected() const { return _disconnected; }
+        bool isDisconnected() const { return disconnected() != Disconnected::No; }
 
         void dumpState(std::ostream& os, const std::string& indent = "\n  ") const
         {
@@ -1322,7 +1401,7 @@ private:
             os << indent << "interactive: " << _interactive;
             os << indent << "close requested: " << _closeRequested;
             os << indent << "unload requested: " << _unloadRequested;
-            os << indent << "disconnected from kit: " << _disconnected;
+            os << indent << "disconnected from kit: " << toString(_disconnected);
         }
 
     private:
@@ -1331,7 +1410,7 @@ private:
         std::atomic<bool> _loaded; //< If the document ever loaded (check isLive to see if it still is).
         std::atomic<bool> _closeRequested; //< Owner-Termination flag.
         std::atomic<bool> _unloadRequested; //< Unload-Requested flag, which may be reset.
-        std::atomic<bool> _disconnected; //< Disconnected from the Kit. Implies unloading.
+        std::atomic<Disconnected> _disconnected; //< Disconnected from the Kit. Implies unloading.
         bool _interactive; //< If the document has interactive dialogs before load
     };
 
@@ -1364,6 +1443,8 @@ private:
         LOG_DBG("Ending [" << DocumentState::toString(_docState.activity()) << "] activity.");
         _docState.setActivity(DocumentState::Activity::None);
     }
+
+    bool forwardUrpToChild(const std::string& message);
 
     /// Performs aggregated work after servicing all client sessions
     void processBatchUpdates();
@@ -1457,6 +1538,10 @@ private:
 
     /// True iff the config per_document.always_save_on_exit is true.
     const bool _alwaysSaveOnExit;
+
+#if !MOBILEAPP
+    Admin& _admin;
+#endif
 
     // Last member.
     /// The UnitWSD instance. We capture it here since

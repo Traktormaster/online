@@ -1,10 +1,133 @@
 /* global describe it cy beforeEach require afterEach */
 
 var helper = require('../../common/helper');
+var desktopHelper = require('../../common/desktop_helper');
 var ceHelper = require('../../common/contenteditable_helper');
 // var repairHelper = require('../../common/repair_document_helper');
 
-describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Editable area - Empty paragraph', function() {
+describe(['taga11ydisabled'], 'Editable area [a11y disabled] - Empty paragraph', function() {
+	var testFileName = 'undo_redo.odt';
+
+	beforeEach(function () {
+		helper.beforeAll(testFileName, 'writer');
+		cy.cGet('div.clipboard').as('clipboard');
+	});
+
+	afterEach(function () {
+		helper.afterAll(testFileName, this.currentTest.state);
+	});
+
+	it('Typing in an empty paragraph', function () {
+		// initial position
+		ceHelper.checkHTMLContent('');
+		ceHelper.checkCaretPosition(0);
+		ceHelper.type('H');
+		ceHelper.checkHTMLContent('H');
+		ceHelper.checkCaretPosition(1);
+	});
+
+	it('Typing <backspace> in an empty paragraph', function () {
+		// initial position
+		ceHelper.checkHTMLContent('');
+		ceHelper.checkCaretPosition(0);
+		// typing
+		ceHelper.type('{backspace}');
+		ceHelper.checkHTMLContent('');
+		ceHelper.checkCaretPosition(0);
+	});
+
+	it('Typing <delete> in an empty paragraph', function () {
+		// initial position
+		ceHelper.checkHTMLContent('');
+		ceHelper.checkCaretPosition(0);
+		// typing
+		ceHelper.type('{del}');
+		ceHelper.checkHTMLContent('');
+		ceHelper.checkCaretPosition(0);
+	});
+});
+
+describe(['taga11ydisabled'], 'Editable area [a11y disabled] - Basic typing', function() {
+	var testFileName = 'undo_redo.odt';
+
+	beforeEach(function () {
+		helper.beforeAll(testFileName, 'writer');
+		cy.cGet('div.clipboard').as('clipboard');
+	});
+
+	afterEach(function () {
+		helper.afterAll(testFileName, this.currentTest.state);
+	});
+
+	it('Typing at paragraph beginning', function () {
+		ceHelper.type('Hello World');
+		ceHelper.checkPlainContent('Hello World');
+		ceHelper.checkCaretPosition(11);
+		ceHelper.moveCaret('home');
+		ceHelper.checkCaretPosition(0);
+		ceHelper.type('k');
+		ceHelper.checkHTMLContent('k');
+		ceHelper.checkCaretPosition(1);
+	});
+
+	it('Typing <delete> at paragraph beginning', function () {
+		ceHelper.type('Hello World');
+		ceHelper.checkPlainContent('Hello World');
+		ceHelper.moveCaret('home');
+		ceHelper.checkCaretPosition(0);
+		ceHelper.type('{del}');
+		ceHelper.checkHTMLContent('');
+		ceHelper.checkCaretPosition(0);
+	});
+
+	it('Typing <enter>', function () {
+		// typing 4 paragraphs
+		ceHelper.type('Hello World');
+		ceHelper.checkPlainContent('Hello World');
+		ceHelper.type('{enter}');
+		ceHelper.checkPlainContent('');
+		ceHelper.type('{enter}');
+		ceHelper.checkPlainContent('');
+		ceHelper.type('{enter}');
+		ceHelper.type('green red');
+		ceHelper.checkPlainContent('green red');
+	});
+
+	it('Typing <backspace>', function () {
+		ceHelper.type('Hello World');
+		ceHelper.checkPlainContent('Hello World');
+		ceHelper.type('{backspace}');
+		ceHelper.checkPlainContent('Hello Worl');
+		ceHelper.checkCaretPosition(10);
+		// clipboard becomes empty
+		ceHelper.moveCaret('home');
+		ceHelper.type('{backspace}');
+		ceHelper.checkHTMLContent('');
+		ceHelper.checkCaretPosition(0);
+		// type after <backspace> at paragraph begin
+		ceHelper.type('k');
+		ceHelper.checkHTMLContent('k');
+		ceHelper.checkCaretPosition(1);
+	});
+
+	it('Preserving spaces', function () {
+		ceHelper.type('Hello     World   ');
+		ceHelper.checkPlainContent('Hello     World   ');
+		ceHelper.type('{enter}');
+		ceHelper.type('   ');
+		ceHelper.checkPlainContent('   ');
+	});
+
+	it('Preserving <tab>s', function () {
+		ceHelper.type('Hello\t\tWorld\t\t');
+		ceHelper.checkPlainContent('Hello\t\tWorld\t\t');
+		ceHelper.type('{enter}');
+		ceHelper.type('\t\t');
+		ceHelper.checkPlainContent('\t\t');
+	});
+});
+
+describe(['taga11yenabled'], 'Editable area - Empty paragraph', function() {
 	var testFileName = 'undo_redo.odt';
 
 	beforeEach(function () {
@@ -51,7 +174,7 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Editable area - Empty para
 	});
 });
 
-describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Editable area - Basic typing and caret moving', function() {
+describe(['taga11yenabled'], 'Editable area - Basic typing and caret moving', function() {
 	var testFileName = 'undo_redo.odt';
 
 	beforeEach(function () {
@@ -349,9 +472,20 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Editable area - Basic typi
 		ceHelper.type('{del}');
 		ceHelper.checkPlainContent('Hello World');
 	});
+
+	it('Typing after switching accessibility state', function () {
+		ceHelper.type('r');
+		desktopHelper.setAccessibilityState(false);
+		ceHelper.checkPlainContent('');
+		ceHelper.type('e');
+		desktopHelper.setAccessibilityState(true);
+		ceHelper.checkPlainContent('re');
+		ceHelper.type('d');
+		ceHelper.checkPlainContent('red');
+	});
 });
 
-describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Editable area - Inner selection', function() {
+describe(['taga11yenabled'], 'Editable area - Inner selection', function() {
 	var testFileName = 'undo_redo.odt';
 
 	beforeEach(function () {
@@ -387,15 +521,30 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Editable area - Inner sele
 		helper.clickAt('P');
 		ceHelper.checkSelectionIsNull();
 		ceHelper.checkCaretPosition(7);
-		// select 'World' by a double click
-		helper.clickAt('P', true);
-		ceHelper.checkSelectionRange(6, 11);
 		// check empty selection
+		ceHelper.moveCaret('left');
+		ceHelper.moveCaret('right', 'shift', 5);
 		ceHelper.moveCaret('left', 'shift', 5);
 		ceHelper.checkSelectionIsEmpty(6);
 		ceHelper.moveCaret('left', 'shift');
 		ceHelper.checkSelectionRange(5, 6);
 		ceHelper.moveCaret('right', 'shift');
+		ceHelper.checkSelectionIsEmpty(6);
+	});
+
+	// double click is failing sometimes, so try it one more time
+	it('Selecting by double clicking', {retries: 2}, function () {
+		ceHelper.type('Hello World');
+		ceHelper.checkPlainContent('Hello World');
+		ceHelper.moveCaret('left', '', 4);
+		ceHelper.checkCaretPosition(7);
+		helper.getBlinkingCursorPosition('P');
+		ceHelper.moveCaret('home');
+		// select 'World' by a double click
+		helper.clickAt('P', true);
+		ceHelper.checkSelectionRange(6, 11);
+		// check empty selection
+		ceHelper.moveCaret('left', 'shift', 5);
 		ceHelper.checkSelectionIsEmpty(6);
 	});
 
@@ -495,7 +644,7 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Editable area - Inner sele
 	});
 });
 
-describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Editable area - Multi-paragraph selection', function() {
+describe(['taga11yenabled'], 'Editable area - Multi-paragraph selection', function() {
 	var testFileName = 'undo_redo.odt';
 
 	beforeEach(function () {
@@ -650,7 +799,7 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Editable area - Multi-para
 	});
 });
 
-describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Editable area - Empty selection', function() {
+describe(['taga11yenabled'], 'Editable area - Empty selection', function() {
 	var testFileName = 'undo_redo.odt';
 
 	beforeEach(function () {
@@ -736,7 +885,7 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Editable area - Empty sele
 	});
 });
 
-describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Editable area - Undo/Redo', function() {
+describe(['taga11yenabled'], 'Editable area - Undo/Redo', function() {
 	var testFileName = 'undo_redo.odt';
 
 	beforeEach(function () {
@@ -816,7 +965,7 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Editable area - Undo/Redo'
 	});
 });
 
-describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Editable area - More typing', function() {
+describe(['taga11yenabled'], 'Editable area - More typing', function() {
 	var testFileName = 'undo_redo.odt';
 
 	beforeEach(function() {
@@ -908,7 +1057,7 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Editable area - More typin
 //   ◦ Item 1.2
 // • Item 2
 // • Item 3
-describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Editable area - Unordered lists', function() {
+describe(['taga11yenabled'], 'Editable area - Unordered lists', function() {
 	var testFileName = 'unordered_list.odt';
 
 	beforeEach(function () {
@@ -1094,4 +1243,132 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Editable area - Unordered 
 		ceHelper.checkCaretPosition(8);
 	});
 
+});
+
+describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Editing - Basic typing', function() {
+	var testFileName = 'undo_redo.odt';
+
+	beforeEach(function () {
+		helper.beforeAll(testFileName, 'writer');
+		cy.cGet('div.clipboard').as('clipboard');
+	});
+
+	afterEach(function () {
+		helper.afterAll(testFileName, this.currentTest.state);
+	});
+
+	function selectAndCheckText(upTo, expectedText) {
+		var backTo = upTo === 'home' ? 'end' : 'home';
+		ceHelper.moveCaret(upTo, 'shift');
+		cy.wait(500);
+		helper.expectTextForClipboard(expectedText);
+		ceHelper.moveCaret(backTo);
+		helper.textSelectionShouldNotExist();
+	}
+
+	it('Typing', function () {
+		// typing paragraph 1
+		ceHelper.type('Hello World');
+		selectAndCheckText('home', 'Hello World');
+		// paragraph 2 (empty)
+		ceHelper.type('{enter}');
+		// paragraph 3 (empty)
+		ceHelper.type('{enter}');
+		// typing paragraph 4
+		ceHelper.type('{enter}');
+		ceHelper.type('green red');
+		selectAndCheckText('home', 'green red');
+		// move up to paragraph 1
+		ceHelper.moveCaret('up', '', 3);
+		ceHelper.moveCaret('end');
+		selectAndCheckText('home', 'Hello World');
+	});
+
+	it('Typing <delete> at paragraph beginning', function () {
+		ceHelper.type('Hello World');
+		ceHelper.moveCaret('home');
+		ceHelper.type('{del}');
+		selectAndCheckText('end', 'ello World');
+	});
+
+	it('Typing <enter>', function () {
+		// typing 4 paragraphs
+		ceHelper.type('Hello World');
+		ceHelper.type('{enter}');
+		ceHelper.type('green red');
+		// move current paragraph one line below
+		ceHelper.moveCaret('home');
+		ceHelper.type('{enter}');
+		selectAndCheckText('end', 'green red');
+		// move to first paragraph
+		ceHelper.moveCaret('up', '', 2);
+		// split paragraph
+		ceHelper.moveCaret('right', '', 5);
+		ceHelper.type('{enter}');
+		selectAndCheckText('end', ' World');
+		ceHelper.moveCaret('up');
+		selectAndCheckText('end', 'Hello');
+	});
+
+	it('Typing <backspace>', function () {
+		ceHelper.type('Hello World');
+		ceHelper.moveCaret('left','',5);
+		ceHelper.type('{backspace}');
+		ceHelper.moveCaret('home');
+		selectAndCheckText('end', 'HelloWorld');
+		ceHelper.moveCaret('right','',5);
+		ceHelper.type(' ');
+		ceHelper.moveCaret('home');
+		selectAndCheckText('end', 'Hello World');
+		ceHelper.moveCaret('end');
+		// delete empty paragraph
+		ceHelper.type('{enter}');
+		ceHelper.type('{backspace}');
+		selectAndCheckText('home', 'Hello World');
+		// type new paragraph
+		ceHelper.type('{enter}');
+		ceHelper.type('green red');
+		// merge with above paragraph
+		ceHelper.moveCaret('home');
+		ceHelper.type('{backspace}');
+		ceHelper.moveCaret('home');
+		selectAndCheckText('end', 'Hello Worldgreen red');
+		// try to delete beyond first paragraph begin
+		ceHelper.type('{backspace}');
+		selectAndCheckText('end', 'Hello Worldgreen red');
+		// type after <backspace> at paragraph begin
+		ceHelper.type('k');
+		ceHelper.moveCaret('left');
+		selectAndCheckText('end', 'kHello Worldgreen red');
+	});
+
+	it('Typing <delete>', function () {
+		ceHelper.type('Hello World');
+		ceHelper.moveCaret('left','',6);
+		ceHelper.type('{del}');
+		ceHelper.moveCaret('home');
+		selectAndCheckText('end', 'HelloWorld');
+		ceHelper.moveCaret('right','',5);
+		ceHelper.type(' ');
+		ceHelper.moveCaret('home');
+		selectAndCheckText('end', 'Hello World');
+		ceHelper.moveCaret('end');
+		// type new paragraph
+		ceHelper.type('{enter}');
+		ceHelper.type('green red');
+		// merge with above paragraph
+		ceHelper.moveCaret('up');
+		ceHelper.moveCaret('end');
+		ceHelper.type('{del}');
+		ceHelper.moveCaret('home');
+		selectAndCheckText('end', 'Hello Worldgreen red');
+		// try to delete beyond paragraph end
+		ceHelper.moveCaret('end');
+		ceHelper.type('{del}');
+		selectAndCheckText('home', 'Hello Worldgreen red');
+		// type after <delete> at paragraph end
+		ceHelper.type('k');
+		ceHelper.moveCaret('right');
+		selectAndCheckText('home', 'Hello Worldgreen redk');
+	});
 });

@@ -54,8 +54,6 @@ class WhiteBoxTests : public CPPUNIT_NS::TestFixture
     CPPUNIT_TEST(testClockAsString);
     CPPUNIT_TEST(testBufferClass);
     CPPUNIT_TEST(testHexify);
-    CPPUNIT_TEST(testUIDefaults);
-    CPPUNIT_TEST(testCSSVars);
     CPPUNIT_TEST(testStat);
     CPPUNIT_TEST(testStringCompare);
     CPPUNIT_TEST(testParseUri);
@@ -87,8 +85,6 @@ class WhiteBoxTests : public CPPUNIT_NS::TestFixture
     void testClockAsString();
     void testBufferClass();
     void testHexify();
-    void testUIDefaults();
-    void testCSSVars();
     void testStat();
     void testStringCompare();
     void testParseUri();
@@ -421,6 +417,9 @@ void WhiteBoxTests::testMessageAbbreviation()
     LOK_ASSERT_EQUAL(std::string(), Util::getDelimitedInitialSubstring("abc", -1, '\n'));
     LOK_ASSERT_EQUAL(std::string("ab"), Util::getDelimitedInitialSubstring("abc", 2, '\n'));
 
+    // The end arg of getAbbreviatedMessage is the length of the first argument, not
+    // the point at which it should be abbreviated. Abbreviation appends ... to the
+    // result
     LOK_ASSERT_EQUAL(std::string(), COOLProtocol::getAbbreviatedMessage(nullptr, 5));
     LOK_ASSERT_EQUAL(std::string(), COOLProtocol::getAbbreviatedMessage(nullptr, -1));
     LOK_ASSERT_EQUAL(std::string(), COOLProtocol::getAbbreviatedMessage("abc", 0));
@@ -437,6 +436,15 @@ void WhiteBoxTests::testMessageAbbreviation()
     abbr = "1234567890123...";
     LOK_ASSERT_EQUAL(abbr, COOLProtocol::getAbbreviatedMessage(s.data(), s.size()));
     LOK_ASSERT_EQUAL(abbr, COOLProtocol::getAbbreviatedMessage(s));
+
+    std::string long_utf8_str_a(COOLProtocol::maxNonAbbreviatedMsgLen - 3, 'a');
+    LOK_ASSERT_EQUAL(long_utf8_str_a + std::string("mü..."),
+                     COOLProtocol::getAbbreviatedMessage(long_utf8_str_a + "müsli"));
+
+    // don't allow the ü sequence to be broken
+    std::string long_utf8_str_b(COOLProtocol::maxNonAbbreviatedMsgLen - 2, 'a');
+    LOK_ASSERT_EQUAL(long_utf8_str_b + std::string("mü..."),
+                     COOLProtocol::getAbbreviatedMessage(long_utf8_str_b + "müsli"));
 }
 
 void WhiteBoxTests::testReplace()
@@ -612,6 +620,26 @@ public:
     void trimIfInactive() override
     {
     }
+
+    bool isDocPasswordProtected() const override
+    {
+        return false;
+    }
+
+    bool haveDocPassword() const override
+    {
+        return false;
+    }
+
+    std::string getDocPassword() const override
+    {
+        return "";
+    }
+
+    DocumentPasswordType getDocPasswordType() const override
+    {
+        return DocumentPasswordType::ToView;
+    }
 };
 
 void WhiteBoxTests::testEmptyCellCursor()
@@ -677,6 +705,18 @@ void WhiteBoxTests::testTileData()
     out.clear();
     LOK_ASSERT_EQUAL(data.appendChangesSince(out, 43), true);
     LOK_ASSERT_EQUAL(std::string("baabaz"), Util::toString(out));
+
+    // append an empty delta
+    data.appendBlob(52, "D", 1);
+    LOK_ASSERT_EQUAL(data.size(), size_t(9));
+    LOK_ASSERT_EQUAL(data._wids.size(), size_t(4));
+    LOK_ASSERT_EQUAL(data._wids.back(), unsigned(52));
+
+    // the next empty delta should pack into the last one
+    data.appendBlob(54, "D", 1);
+    LOK_ASSERT_EQUAL(data.size(), size_t(9));
+    LOK_ASSERT_EQUAL(data._wids.size(), size_t(4));
+    LOK_ASSERT_EQUAL(data._wids.back(), unsigned(54));
 }
 
 void WhiteBoxTests::testRectanglesIntersect()
@@ -1021,47 +1061,6 @@ void WhiteBoxTests::testHexify()
         LOK_ASSERT_EQUAL(randStrLen, decoded2.size());
         LOK_ASSERT_EQUAL(Util::toString(s2), Util::toString(decoded2));
     }
-}
-
-void WhiteBoxTests::testUIDefaults()
-{
-    constexpr auto testname = __func__;
-
-    std::string uiMode;
-    std::string uiTheme;
-
-    LOK_ASSERT_EQUAL(std::string("{\"uiMode\":\"classic\"}"),
-                     FileServerRequestHandler::uiDefaultsToJSON("UIMode=classic;huh=bleh;", uiMode, uiTheme));
-    LOK_ASSERT_EQUAL(std::string("classic"), uiMode);
-
-    LOK_ASSERT_EQUAL(std::string("{\"spreadsheet\":{\"ShowSidebar\":false},\"text\":{\"ShowRuler\":true}}"),
-                     FileServerRequestHandler::uiDefaultsToJSON("TextRuler=true;SpreadsheetSidebar=false", uiMode, uiTheme));
-    LOK_ASSERT_EQUAL(std::string(""), uiMode);
-
-    LOK_ASSERT_EQUAL(std::string("{\"presentation\":{\"ShowStatusbar\":false},\"spreadsheet\":{\"ShowSidebar\":false},\"text\":{\"ShowRuler\":true},\"uiMode\":\"notebookbar\"}"),
-                     FileServerRequestHandler::uiDefaultsToJSON(";;UIMode=notebookbar;;PresentationStatusbar=false;;TextRuler=true;;bah=ugh;;SpreadsheetSidebar=false", uiMode, uiTheme));
-
-    LOK_ASSERT_EQUAL(std::string("{\"drawing\":{\"ShowStatusbar\":true},\"presentation\":{\"ShowStatusbar\":false},\"spreadsheet\":{\"ShowSidebar\":false},\"text\":{\"ShowRuler\":true},\"uiMode\":\"notebookbar\"}"),
-                     FileServerRequestHandler::uiDefaultsToJSON(";;UIMode=notebookbar;;PresentationStatusbar=false;;TextRuler=true;;bah=ugh;;SpreadsheetSidebar=false;;DrawingStatusbar=true", uiMode, uiTheme));
-
-    LOK_ASSERT_EQUAL(std::string("notebookbar"), uiMode);
-}
-
-void WhiteBoxTests::testCSSVars()
-{
-    constexpr auto testname = __func__;
-
-    LOK_ASSERT_EQUAL(std::string("<style>:root {--co-somestyle-text:#123456;--co-somestyle-size:15px;}</style>"),
-                     FileServerRequestHandler::cssVarsToStyle("--co-somestyle-text=#123456;--co-somestyle-size=15px;"));
-
-    LOK_ASSERT_EQUAL(std::string("<style>:root {--co-somestyle-text:#123456;--co-somestyle-size:15px;}</style>"),
-                     FileServerRequestHandler::cssVarsToStyle(";;--co-somestyle-text=#123456;;--co-somestyle-size=15px;;;"));
-
-    LOK_ASSERT_EQUAL(std::string("<style>:root {--co-somestyle-text:#123456;--co-somestyle-size:15px;}</style>"),
-                     FileServerRequestHandler::cssVarsToStyle("--co-somestyle-text=#123456;;--co-somestyle-size=15px;--co-sometext#324;;"));
-
-    LOK_ASSERT_EQUAL(std::string("<style>:root {--co-somestyle-text:#123456;}</style>"),
-                     FileServerRequestHandler::cssVarsToStyle("--co-somestyle-text=#123456;;--some-val=3453--some-other-val=4536;;"));
 }
 
 void WhiteBoxTests::testStat()

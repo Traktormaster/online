@@ -1,7 +1,3 @@
-[![Build Status](https://cpci.cbg.collabora.co.uk:8080/view/Gerrit/job/Gerrit%20for%20core%20(co-2021)%20side%20of%20online%20co-21-11/badge/icon?subject=Gerrit%20core%20co-2021)](https://cpci.cbg.collabora.co.uk:8080/view/Gerrit/job/Gerrit%20for%20core%20(co-2021)%20side%20of%20online%20co-21-11/) [![Build Status](https://cpci.cbg.collabora.co.uk:8080/view/Gerrit/job/Gerrit%20for%20core%20(co-22.05)%20side%20of%20online%20master/badge/icon?subject=Gerrit%20core%20co-22.05)](https://cpci.cbg.collabora.co.uk:8080/view/Gerrit/job/Gerrit%20for%20core%20(co-22.05)%20side%20of%20online%20master/)
-
-[![Build Status](https://cpci.cbg.collabora.co.uk:8080/view/Tinderbox/job/Tinderbox%20for%20online%20co-21-11//badge/icon?subject=co-21-11%20vs%20co-2021)](https://cpci.cbg.collabora.co.uk:8080/view/Tinderbox/job/Tinderbox%20for%20online%20co-21-11/)  [![Build Status](https://cpci.cbg.collabora.co.uk:8080/view/Gerrit/job/Tinderbox%20for%20online%20master%20against%20co-22.05/badge/icon?subject=master%20vs%20co-22.05)](https://cpci.cbg.collabora.co.uk:8080/view/Gerrit/job/Tinderbox%20for%20online%20master%20against%20co-22.05/)
-
 <p align="right"><a href="#gitpod"><img alt="Open in Gitpod" src="https://gitpod.io/button/open-in-gitpod.svg"></a></p>
 
 # Collabora Online
@@ -26,7 +22,7 @@
 
 ## Get in touch 💬
 
-* [📋 Forum](forum.collaboraonline.com/)
+* [📋 Forum](https://forum.collaboraonline.com/)
 * [👥 Facebook](https://www.facebook.com/collaboraoffice/)
 * [🐣 Twitter](https://twitter.com/CollaboraOffice)
 * [🐘 Mastodon](https://mastodon.social/@CollaboraOffice)
@@ -87,7 +83,7 @@ Head over to https://collaboraonline.github.io/post/build-code/ select gitpod fr
 Interesting things to keep in mind:
 - Make sure your browser is not blocking windows/tabs from opening from the gitpod workspace URL (maybe add `*.gitpod.io` to your browser's whitelist)
   - The GitPod tasks will run automatically and further instructions will be printed out right in the terminal
-  - VNC tab will open automatically if not just click in the left icon `Remote explorer` and click `6080`. You will see a tab completly black, that's normal.
+  - VNC tab will open automatically if not just click on the left icon `Remote explorer` and click `6080`. You will see a tab completely black, that's normal.
   - As mentioned in those instructions if you are not using the VS Code desktop and if you are only relying on your browser please:
     - Do not try to click the URL from the make run out put instead copy that URL and execute `firefox [paste URL here]`
     - Head over to the tab where the VNC is opened (black page), you will see Firefox opening there, maximize and have fun.

@@ -196,6 +196,7 @@
       <jwt_expiry_secs desc="Time in seconds before the Admin Console's JWT token expires" type="int" default="1800">1800</jwt_expiry_secs>
       <enable_macros_execution desc="Specifies whether the macro execution is enabled in general. This will enable Basic and Python scripts to execute both installed and from documents. If it is set to false, the macro_security_level is ignored. If it is set to true, the mentioned entry specified the level of macro security." type="bool" default="false">false</enable_macros_execution>
       <macro_security_level desc="Level of Macro security. 1 (Medium) Confirmation required before executing macros from untrusted sources. 0 (Low, not recommended) All macros will be executed without confirmation." type="int" default="1">1</macro_security_level>
+      <enable_websocket_urp desc="Should we enable URP (UNO remote protocol) communication over the websocket. This allows full control of the Kit child server to anyone with access to the websocket including executing macros without confirmation or running arbitrary shell commands in the jail." type="bool" default="false">false</enable_websocket_urp>
       <enable_metrics_unauthenticated desc="When enabled, the /cool/getMetrics endpoint will not require authentication." type="bool" default="false">false</enable_metrics_unauthenticated>
     </security>
 
@@ -247,16 +248,21 @@
         </ssl>
     </storage>
 
-    <tile_cache_persistent desc="Should the tiles persist between two editing sessions of the given document?" type="bool" default="true">true</tile_cache_persistent>
-
     <admin_console desc="Web admin console settings.">
         <enable desc="Enable the admin console functionality" type="bool" default="true">true</enable>
         <enable_pam desc="Enable admin user authentication with PAM" type="bool" default="false">false</enable_pam>
         <username desc="The username of the admin console. Ignored if PAM is enabled."></username>
         <password desc="The password of the admin console. Deprecated on most platforms. Instead, use PAM or coolconfig to set up a secure password."></password>
+        <logging desc="Log admin activities irrespective of logging.level">
+            <admin_login desc="log when an admin logged into the console" type="bool" default="true">true</admin_login>
+            <metrics_fetch desc="log when metrics endpoint is accessed and metrics endpoint authentication is enabled" type="bool" default="true">true</metrics_fetch>
+            <monitor_connect desc="log when external monitor gets connected" type="bool" default="true">true</monitor_connect>
+            <admin_action desc="log when admin does some action for example killing a process" type="bool" default="true">true</admin_action>
+        </logging>
     </admin_console>
 
     <monitors desc="Addresses of servers we connect to on start for monitoring">
+        <!-- <monitor desc="Address of the monitor and interval after which it should try reconnting after disconnect" retryInterval="20">wss://foobar:234/ws</monitor> -->
     </monitors>
 
     <quarantine_files desc="Files are stored here to be examined later in cases of crashes or similar situation." default="false" enable="false">
@@ -269,6 +275,8 @@
     <remote_config>
         <remote_url desc="remote server to which you will send resquest to get remote config in response" type="string" default=""></remote_url>
     </remote_config>
+
+    <stop_on_config_change desc="Stop coolwsd whenever config files change." type="bool" default="false">false</stop_on_config_change>
 
     <remote_font_config>
         <url desc="URL of optional JSON file that lists fonts to be included in Online" type="string" default=""></url>
@@ -295,5 +303,9 @@
     </zotero>
 
     <help_url desc="The Help root URL, or empty for no help (hides the Help buttons)" type="string" default="@HELP_URL@">@HELP_URL@</help_url>
+
+    <overwrite_mode>
+        <enable desc="Enable overwrite mode (user can use insert key)" type="bool" default="true">true</enable>
+    </overwrite_mode>
 
 </config>

@@ -47,6 +47,7 @@ constexpr int HttpPortNumber = 9191;
 constexpr int SslPortNumber = 9193;
 
 static bool EnableHttps = false;
+bool EnableExperimental = false;
 
 struct Session
 {
@@ -119,8 +120,7 @@ public:
         _session->setTimeout(Poco::Timespan(10, 0));
         HTTPRequest request(HTTPRequest::HTTP_GET, "/ws");
         HTTPResponse response;
-        return std::shared_ptr<WebSocket>(
-            new WebSocket(*_session, request, response));
+        return std::make_shared<WebSocket>(*_session, request, response);
     }
 };
 
@@ -228,7 +228,7 @@ struct Client : public Poco::Util::Application
         std::vector<char> data;
         for (size_t i = 1; i < (1 << 14); ++i)
         {
-            data.push_back((char)(std::rand() / (RAND_MAX/256)));
+            data.push_back((char)(Util::rng::getNext() / (UINT_MAX/256)));
             ws->sendFrame(data.data(), data.size(), WebSocket::SendFlags::FRAME_BINARY);
 
             res.resize(i);
@@ -252,6 +252,7 @@ struct Client : public Poco::Util::Application
     }
 
 public:
+    // coverity[root_function] : don't warn about uncaught exceptions
     int main(const std::vector<std::string>& args) override
     {
         EnableHttps = (args.size() > 0 && args[0] == "ssl");
@@ -265,7 +266,7 @@ public:
 
             Poco::Net::Context::Params sslParams;
             Poco::Net::Context::Ptr sslContext = new Poco::Net::Context(Poco::Net::Context::CLIENT_USE, sslParams);
-            Poco::Net::SSLManager::instance().initializeClient(nullptr, invalidCertHandler, sslContext);
+            Poco::Net::SSLManager::instance().initializeClient(nullptr, std::move(invalidCertHandler), std::move(sslContext));
         }
 
         testWebsocketPingPong();
@@ -279,6 +280,7 @@ public:
     }
 };
 
+// coverity[root_function] : don't warn about uncaught exceptions
 POCO_APP_MAIN(Client)
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

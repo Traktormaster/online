@@ -13,6 +13,10 @@ L.Map.include({
 	setPermission: function (perm) {
 		var button = $('#mobile-edit-button');
 		button.off('click');
+		button.attr('tabindex', 0);
+		button.attr('role', 'button');
+		button.attr('title', _('Edit document'));
+		button.attr('aria-label', _('Edit document'));
 		// app.file.fileBasedView is new view that has continuous scrolling
 		// used for PDF and we dont permit editing for PDFs
 		// this._shouldStartReadOnly() is a check for files that should start in readonly mode and even on desktop browser
@@ -189,12 +193,11 @@ L.Map.include({
 	_enterEditMode: function (perm) {
 		this._permission = perm;
 
-		app.socket.sendMessage('requestloksession');
 		if (!L.Browser.touch) {
 			this.dragging.disable();
 		}
 
-		if ((window.mode.isMobile() || window.mode.isTablet()) && this._textInput) {
+		if ((window.mode.isMobile() || window.mode.isTablet()) && this._textInput && this.getDocType() === 'text') {
 			this._textInput.setSwitchedToEditMode();
 		}
 
@@ -223,6 +226,7 @@ L.Map.include({
 		}
 		this.fire('updatepermission', {perm : perm});
 		this.fire('closemobilewizard');
+		this.fire('closealldialogs');
 
 		if (window.ThisIsTheAndroidApp)
 			window.postMobileMessage('EDITMODE off');
@@ -232,7 +236,6 @@ L.Map.include({
 		if (this.isEditMode()) {
 			return;
 		}
-		app.socket.sendMessage('requestloksession');
 		this.dragging.disable();
 	},
 

@@ -8,10 +8,12 @@
  * text area itself.
  */
 
-/* global app */
+/* global app _ */
 
 L.TextInput = L.Layer.extend({
 	initialize: function() {
+		this._className = 'TextInput';
+
 		// Flag to denote the composing state, derived from
 		// compositionstart/compositionend events; unused
 		this._isComposing = false;
@@ -40,8 +42,8 @@ L.TextInput = L.Layer.extend({
 		this._hasWorkingSelectionStart = undefined; // does it work ?
 		this._ignoreNextBackspace = false;
 
-		this._preSpaceChar = '<img id="pre-space" alt=" ">';
-		this._postSpaceChar = '<img id="post-space" alt=" ">';
+		this._preSpaceChar = '<img id="pre-space" alt=" " aria-hidden="true">';
+		this._postSpaceChar = '<img id="post-space" alt=" " aria-hidden="true">';
 		this._initialContent = this._preSpaceChar + this._postSpaceChar;
 
 		// Debug flag, used in fancyLog(). See the debug() method.
@@ -96,16 +98,22 @@ L.TextInput = L.Layer.extend({
 
 	},
 
+	hasAccessibilitySupport: function() {
+		return false;
+	},
+
 	onAdd: function() {
 		if (this._container) {
 			this.getPane().appendChild(this._container);
 			this.update();
 		}
 
-		this._emptyArea();
+		if (!this.hasAccessibilitySupport()) {
+			this._emptyArea();
+			this._map.on('commandresult', this._onCommandResult, this);
+		}
 
 		this._map.on('updatepermission', this._onPermission, this);
-		this._map.on('commandresult', this._onCommandResult, this);
 		L.DomEvent.on(this._textArea, 'focus blur', this._onFocusBlur, this);
 
 		// Do not wait for a 'focus' event to attach events if the
@@ -141,6 +149,9 @@ L.TextInput = L.Layer.extend({
 			this.getPane().removeChild(this._container);
 		}
 
+		if (!this.hasAccessibilitySupport()) {
+			this._map.off('commandresult', this._onCommandResult, this);
+		}
 		this._map.off('updatepermission', this._onPermission, this);
 		L.DomEvent.off(this._textArea, 'focus blur', this._onFocusBlur, this);
 		L.DomEvent.off(this._map.getContainer(), 'mousedown touchstart', this._abortComposition, this);
@@ -165,22 +176,31 @@ L.TextInput = L.Layer.extend({
 	},
 
 	_onCommandResult: function(e) {
-		if ((e.commandName === '.uno:Undo' || e.commandName === '.uno:Redo') && window.mode.isMobile()) {
-			//undoing something on mobile does not trigger any input method
-			//this causes problem in mobile working with suggestions
+		if (this.hasAccessibilitySupport())
+			return;
+
+		if (e.commandName === '.uno:Undo' || e.commandName === '.uno:Redo') {
+			//undoing something does not trigger any input method
+			// this causes the editable area content not to be a substring
+			// of the document text; moreover this causes problem
+			// in mobile working with suggestions:
 			//i.e: type "than" and then select "thank" from suggestion
 			//now undo and then again select "thanks" from suggestions
 			//final output is "thans"
-			//this happens because undo doesn't change the textArea value
-			//and no other way to maintain the history
-			//So better to clean the textarea so no suggestions appear
+			//this happens because undo doesn't change the editable area content.
+			//So better to clean the editable area content.
 			this._emptyArea();
 		}
 	},
 
+	hasFocus: function() {
+		return this._textArea && this._textArea === document.activeElement;
+	},
+
 	_onFocusBlur: function(ev) {
 		this._fancyLog(ev.type, '');
-		var onoff = (ev.type == 'focus' ? L.DomEvent.on : L.DomEvent.off).bind(L.DomEvent);
+		this._statusLog('_onFocusBlur');
+		var onoff = (ev.type === 'focus' ? L.DomEvent.on : L.DomEvent.off).bind(L.DomEvent);
 
 		// Debug - connect first for saner logging.
 		onoff(
@@ -191,9 +211,18 @@ L.TextInput = L.Layer.extend({
 		);
 
 		// we already do the same in _onBeforeInput, anyway for Safari on iOS is too late:
-		// the selection is messed up, so we miss the first typed key
-		if (ev.type === 'focus' && !this._isSelectionValid()) {
-			this._emptyArea();
+		// the selection is messed up, so we miss the first typed key.
+		// Needed also after a Ctrl+C.
+		if (ev.type === 'focus') {
+			if (!this._isSelectionValid() || this._isCursorAtBeginning()) {
+				if (this.hasAccessibilitySupport()) {
+					this._setSelectionRange(this._lastSelectionStart, this._lastSelectionEnd);
+				} else {
+					this._emptyArea();
+				}
+			} else if (this.hasAccessibilitySupport()) {
+				this._updateFocusedParagraph();
+			}
 		}
 
 		onoff(this._textArea, 'input', this._onInput, this);
@@ -210,6 +239,9 @@ L.TextInput = L.Layer.extend({
 		if (ev.type === 'blur' && this._isComposing) {
 			this._abortComposition(ev);
 		}
+
+		if (ev.type === 'blur' && this._hasFormulaBarFocus())
+			this._map.formulabar.blurField();
 	},
 
 	// Focus the textarea/contenteditable
@@ -238,7 +270,7 @@ L.TextInput = L.Layer.extend({
 				this._textArea.setAttribute('readonly', true);
 		}
 
-		if (!window.ThisIsTheiOSApp && navigator.platform !== 'iPhone') {
+		if (!window.ThisIsTheiOSApp && navigator.platform !== 'iPhone' && !window.ThisIsAMobileApp && !window.mode.isMobile()) {
 			this._textArea.focus();
 		} else if (acceptInput === true) {
 			// On the iPhone, only call the textarea's focus() when we get an explicit
@@ -294,10 +326,7 @@ L.TextInput = L.Layer.extend({
 	},
 
 	getValue: function() {
-		var value = this.getPlainTextContent();
-		if (this._map && this._map.formulabar && this._map.formulabar.hasFocus())
-			value =  this._map.formulabar.getValue();
-		return value;
+		return this.getPlainTextContent();
 	},
 
 	getPlainTextContent: function() {
@@ -306,6 +335,15 @@ L.TextInput = L.Layer.extend({
 
 	getHTML: function() {
 		return 	this._textArea.innerHTML;
+	},
+
+	_wrapContent: function(content) {
+		var wrappedContent = this.hasAccessibilitySupport()
+			? '<span id="readable-content" aria-hidden="false">' + content + '</span>'
+			: content;
+		return content.length === 0
+			? this._initialContent
+			: this._preSpaceChar + wrappedContent + this._postSpaceChar;
 	},
 
 	resetContent: function() {
@@ -319,43 +357,24 @@ L.TextInput = L.Layer.extend({
 		for (var i = 0; i < codePoints.length; ++i) {
 			if (codePoints[i] <= 0xFFFF)
 				result = (result +
-					  String.fromCharCode(codePoints[i]));
+					String.fromCharCode(codePoints[i]));
 			else
 				result = (result +
-					  String.fromCharCode(((codePoints[i] - 0x10000) >> 10) + 0xD800) +
-					  String.fromCharCode(((codePoints[i] - 0x10000) % 0x400) + 0xDC00));
+					String.fromCharCode(((codePoints[i] - 0x10000) >> 10) + 0xD800) +
+					String.fromCharCode(((codePoints[i] - 0x10000) % 0x400) + 0xDC00));
 		}
 		return result;
 	},
 
 	// As the name says, this returns this._textArea.value as an array of numbers that are
 	// Unicode code points. *Not* UTF-16 code units.
-	getValueAsCodePoints: function() {
-		var value = this.getValue();
-		if (false) {
-			var s = '[';
-			for (var ii = 0; ii < value.length; ++ii) {
-				if (ii > 0)
-					s = s + ',';
-				s = s + '0x' + value.charCodeAt(ii).toString(16);
-			}
-			s = s + ']';
-			window.app.console.log('L.TextInput.getValueAsCodePoints: ' + s);
-		}
+	getValueAsCodePoints: function(value) {
+		// this._logCharCodeSequence(value);
 		var arr = [];
 		var code;
 		for (var i = 0; i < value.length; ++i)
 		{
 			code = value.charCodeAt(i);
-
-			// if it were not for IE11: "for (code of value)" does the job.
-			if (code >= 0xd800 && code <= 0xdbff) // handle UTF16 pairs.
-			{
-				// TESTME: harder ...
-				var high = (code - 0xd800) << 10;
-				code = value.charCodeAt(++i);
-				code = high + code - 0xdc00 + 0x10000;
-			}
 			arr.push(code);
 		}
 		return arr;
@@ -386,6 +405,9 @@ L.TextInput = L.Layer.extend({
 		this._textAreaLabel = L.DomUtil.create('label', 'visuallyhidden', this._container);
 		this._textAreaLabel.setAttribute('for', 'clipboard-area');
 		this._textAreaLabel.innerHTML = 'clipboard area';
+		if (this.hasAccessibilitySupport()) {
+			this._setSelectionFlag(false);
+		}
 
 		// Prevent automatic line breaks in the textarea. Without this,
 		// chromium/blink will trigger input/insertLineBreak events by
@@ -396,9 +418,37 @@ L.TextInput = L.Layer.extend({
 		// Prevent autofocus
 		this._textArea.setAttribute('disabled', true);
 
+		if (L.Browser.cypressTest) {
+			var that = this;
+			this._textArea._hasAccessibilitySupport = function() {
+				return that.hasAccessibilitySupport();
+			};
+			this._textArea._wrapContent = function(content) {
+				return that._wrapContent(content);
+			};
+			this._textArea._getSelectionStart = function() {
+				return that._getSelectionStart();
+			};
+			this._textArea._getSelectionEnd = function() {
+				return that._getSelectionEnd();
+			};
+		}
+
 		this._setupStyles();
 
 		this._emptyArea();
+
+		if (!this.hasAccessibilitySupport()) {
+			var warningMessage =
+				_('Screen reader support for text content is disabled. ') +
+				_('You need to enable it both at server level and in the UI. ') +
+				_('Look for the accessibility section in coolwsd.xml for server setting. ') +
+				_('Also check the accessibility support toggle under %parentControl.').replace(
+					'%parentControl',
+					window.userInterfaceMode === 'notebookbar' ? _('the Help tab') : _('the View menu')
+				);
+			this._textArea.setAttribute('aria-description', warningMessage);
+		}
 	},
 
 	_setupStyles: function() {
@@ -406,11 +456,11 @@ L.TextInput = L.Layer.extend({
 			// Style for debugging
 			this._container.style.opacity = 0.5;
 			this._textArea.style.cssText = 'border:1px solid red !important';
-			this._textArea.style.width = '120px';
-			this._textArea.style.height = '50px';
+			this._textArea.style.width = L.Browser.cypressTest ? '1px' : '120px';
+			this._textArea.style.height = L.Browser.cypressTest ? '1px' : '50px';
 			this._textArea.style.overflow = 'display';
 
-			this._textArea.style.fontSize = '30px';
+			this._textArea.style.fontSize = '20px';
 			this._textArea.style.position = 'relative';
 			this._textArea.style.left = '10px';
 		} else {
@@ -480,6 +530,20 @@ L.TextInput = L.Layer.extend({
 	},
 
 	_setPos: function(pos) {
+		// the offset is needed since we have to move away from the edited text
+		// or double clicks for selecting text doesn't work properly
+		if (L.Browser.cypressTest) {
+			// Some cypress tests require for the editable area to be as near as possible
+			// to the caret overlay when editing. In fact a synthetic mouse click on
+			// the editable area is performed in order to make it focused and ready for the input.
+			// However, since this click is forwarded to core, it could change the current caret
+			// position causing a test failure.
+			pos.x += 10;
+			pos.y += 10;
+		}
+		else {
+			pos.y += this._isDebugOn ? 50 : 200;
+		}
 		L.DomUtil.setPosition(this._container, pos);
 	},
 
@@ -561,49 +625,61 @@ L.TextInput = L.Layer.extend({
 		}
 	},
 
+	_handleMisplacedCursorAtBeginning: function(ev) {
+		// It seems some inputs e.g. GBoard can magically move the cursor from " | " to "|  "
+		window.app.console.log('Oh dear, gboard sabotaged our cursor position, fixing');
+		// But when we detect the problem only emit a delete when we have one.
+		if (ev.inputType && ev.inputType === 'deleteContentBackward')
+		{
+			this._removeTextContent(1, 0);
+			// Having mended it we now get a real backspace on input (sometimes)
+			this._ignoreNextBackspace = true;
+		}
+		else if (this.hasAccessibilitySupport()) {
+			this._setCursorPosition(this._getLastCursorPosition());
+		}
+		if (!this.hasAccessibilitySupport()) {
+			this._emptyArea();
+		}
+	},
+
 	// Backspaces and deletes at the beginning / end are filtered out, so
 	// we get a beforeinput, but no input for them. Sometimes we can end up
 	// in a state where we lost our leading / terminal chars and can't recover
 	_onBeforeInput: function(ev) {
 		if (this._map.uiManager.isUIBlocked())
 			return;
-
+		this._statusLog('_onBeforeInput [');
 		this._ignoreNextBackspace = false;
-		if (this._hasWorkingSelectionStart) {
-			if (!this._isSelectionValid()) {
-				this._emptyArea();
-			} else if (this._isInitialContent() && this._isCursorAtBeginning())
-			{
-				// It seems some inputs eg. GBoard can magically move the cursor from " | " to "|  "
-				window.app.console.log('Oh dear, gboard sabotaged our cursor position, fixing');
-				// But when we detect the problem only emit a delete when we have one.
-				if (ev.inputType && ev.inputType === 'deleteContentBackward')
-				{
-					this._removeTextContent(1, 0);
-					// Having mended it we now get a real backspace on input (sometimes)
-					this._ignoreNextBackspace = true;
-				}
-				this._emptyArea();
-			}
+		if (!this._isSelectionValid()) {
+			this._emptyArea();
 		}
-	},
-
-	// Used by FormulaBarJSDialog
-	updateLastContent: function() {
-		this._lastContent = this.getValueAsCodePoints();
+		else if (this._isInitialContent() && this._isCursorAtBeginning()) {
+			this._handleMisplacedCursorAtBeginning(ev);
+		}
+		// Firefox is not able to delete the <img> post space. Since no 'input' event is generated,
+		// we need to handle a <delete> at the end of the paragraph, here.
+		if (L.Browser.gecko && this._isCursorAtEnd() && this._deleteHint === 'delete') {
+			window.app.console.log('Sending delete');
+			this._removeTextContent(0, 1);
+			this._emptyArea();
+		}
+		this._statusLog('_onBeforeInput ]');
 	},
 
 	_isDigit: function(asciiChar) {
-		if (asciiChar >= 48 && asciiChar <= 57)
-			return true;
-		return false;
+		return asciiChar >= 48 && asciiChar <= 57;
+	},
+
+	_hasFormulaBarFocus: function() {
+		return 	this._map && this._map.formulabar && this._map.formulabar.hasFocus();
 	},
 
 	// Fired when text has been inputed, *during* and after composing/spellchecking
 	_onInput: function(ev) {
 		if (this._map.uiManager.isUIBlocked())
 			return;
-
+		this._statusLog('_onInput [');
 		app.idleHandler.notifyActive();
 
 		if (this._ignoreInputCount > 0) {
@@ -611,20 +687,15 @@ L.TextInput = L.Layer.extend({
 			return;
 		}
 
-		if (ev.inputType) {
-			if (ev.inputType == 'deleteContentForward')
+		if (this._deleteHint === '' && ev.inputType) {
+			if (ev.inputType === 'deleteContentForward')
 				this._deleteHint = 'delete';
-			else if (ev.inputType == 'deleteContentBackward')
+			else if (ev.inputType === 'deleteContentBackward')
 				this._deleteHint = 'backspace';
-			else
-				this._deleteHint = '';
 		}
 
 		var ignoreBackspace = this._ignoreNextBackspace;
 		this._ignoreNextBackspace = false;
-
-		var content = this.getValueAsCodePoints();
-		// Note that content is an array of Unicode code points
 
 		if (this._newlineHint) {
 			this._sendNewlineEvent();
@@ -646,6 +717,10 @@ L.TextInput = L.Layer.extend({
 			this._emptyArea();
 			return;
 		}
+
+		var value = this.getValue();
+		var content = this.getValueAsCodePoints(value);
+		// Note that content is an array of Unicode code points
 
 		// In the android keyboard when you try to erase in an empty area
 		// and then enter some character,
@@ -683,15 +758,6 @@ L.TextInput = L.Layer.extend({
 		if (removeBefore > 0 || removeAfter > 0)
 			this._removeTextContent(removeBefore, removeAfter);
 
-		var docLayer = this._map._docLayer;
-		if (removeBefore > 0 && docLayer._typingMention) {
-			var ch = docLayer._mentionText.pop();
-			if (ch === '@')
-				this._map.fire('closementionpopup', { 'typingMention': false });
-			else
-				this._map.fire('sendmentiontext', {data: docLayer._mentionText});
-		}
-
 		var newText = content;
 		if (matchTo > 0)
 			newText = newText.slice(matchTo);
@@ -699,36 +765,51 @@ L.TextInput = L.Layer.extend({
 		this._lastContent = content;
 
 		if (newText.length > 0) {
-			// When the cell formatted as percent, to trig percentage sign addition
-			// automatically we send the first digit character as KeyEvent.
-			if (this._map.getDocType() === 'spreadsheet' &&
-			    content.length === 1 && ev.inputType === 'insertText' &&
-				this._isDigit(newText) && window.mode.isDesktop()) {
-				this._sendKeyEvent(newText, this._unoKeyMap[newText], 'input');
-			}
-			else
-				this._sendText(this.codePointsToString(newText));
+			this._sendNewText(ev, content, newText);
 		}
 
 		// was a 'delete' and we need to reset world.
 		if (removeAfter > 0)
 			this._emptyArea();
 
-		// special handling for formulabar
-		if (content.length) {
-			var contentString = this.codePointsToString(content);
-			if (contentString[matchTo] === '\n' || contentString.charCodeAt(matchTo) === 13)
-				this._finishFormulabarEditing();
-		}
+		// special handling for formula bar
+		this._finishFormulabarEditing(content, matchTo);
 
 		// special handling for mentions
+		this._handleMentionInput(ev, removeBefore);
+
+		this._statusLog('_onInput ]');
+	},
+
+	_sendNewText: function (ev, content, newText) {
+		// When the cell formatted as percent, to trig percentage sign addition
+		// automatically we send the first digit character as KeyEvent.
+		if (this._map.getDocType() === 'spreadsheet' &&
+			content.length === 1 && ev.inputType === 'insertText' &&
+			this._isDigit(newText) && window.mode.isDesktop()) {
+			this._sendKeyEvent(newText, this._unoKeyMap[newText], 'input');
+		}
+		else {
+			this._sendText(this.codePointsToString(newText));
+		}
+	},
+
+	_handleMentionInput: function (ev, removeBefore) {
+		var docLayer = this._map._docLayer;
 		if (docLayer._typingMention)  {
-			if (removeBefore === 0) {
+			if (removeBefore > 0) {
+				var ch = docLayer._mentionText.pop();
+				if (ch === '@') {
+					this._map.fire('closementionpopup', { 'typingMention': false });
+				} else {
+					this._map.fire('sendmentiontext', {data: docLayer._mentionText});
+				}
+			} else if (removeBefore === 0) {
 				docLayer._mentionText.push(ev.data);
 				var regEx = /^[0-9a-zA-Z ]+$/;
-				if (ev.data && ev.data.match(regEx))
+				if (ev.data && ev.data.match(regEx)) {
 					this._map.fire('sendmentiontext', {data: docLayer._mentionText});
-				else {
+				} else {
 					this._map.fire('closementionpopup', { 'typingMention': false });
 				}
 			}
@@ -738,30 +819,22 @@ L.TextInput = L.Layer.extend({
 			docLayer._mentionText.push(ev.data);
 			docLayer._typingMention = true;
 		}
+
 	},
 
-	_finishFormulabarEditing: function() {
-		// now we use that only on touch devices
-		if (window.mode.isDesktop())
-			return;
-
-		if (this._map && this._map.formulabar && this._map.formulabar.hasFocus())
-			this._map.dispatch('acceptformula');
+	_finishFormulabarEditing: function(content, matchTo) {
+		if (this._hasFormulaBarFocus() && content.length) {
+			var contentString = this.codePointsToString(content);
+			if (contentString[matchTo] === '\n' || contentString.charCodeAt(matchTo) === 13) {
+				this._map.dispatch('acceptformula');
+			}
+		}
 	},
 
 	// Sends the given (UTF-8) string of text to coolwsd, as IME (text composition)
 	// messages
 	_sendText: function(text) {
-		if (false) {
-			var s = '[';
-			for (var ii = 0; ii < text.length; ++ii) {
-				if (ii > 0)
-					s = s + ',';
-				s = s + '0x' + text.charCodeAt(ii).toString(16);
-			}
-			s = s + ']';
-			window.app.console.log('L.TextInput._sendText: ' + s);
-		}
+		// this._logCharCodeSequence(text);
 		this._fancyLog('send-text-to-coolwsd', text);
 
 		// MSIE/Edge cannot compare a string to "\n" for whatever reason,
@@ -778,7 +851,9 @@ L.TextInput = L.Layer.extend({
 			for (var i = 0; i < l; i++) {
 				if (i !== 0) {
 					this._sendKeyEvent(13, 1280);
-					this._emptyArea();
+					if (!this.hasAccessibilitySupport()) {
+						this._emptyArea();
+					}
 				}
 				if (parts[i].length > 0) {
 					this._sendCompositionEvent(parts[i]);
@@ -794,6 +869,7 @@ L.TextInput = L.Layer.extend({
 	// (some combination of browser + input method don't fire those on an
 	// empty contenteditable).
 	_emptyArea: function(noSelect) {
+		this._statusLog('_emptyArea [');
 		this._fancyLog('empty-area');
 
 		this._ignoreInputCount++;
@@ -806,11 +882,11 @@ L.TextInput = L.Layer.extend({
 
 		// window.app.console.log('Set old/lastContent to empty');
 		this._lastContent = [];
+		if (this.hasAccessibilitySupport()) {
+			this._setLastCursorPosition(0);
+		}
 
 		this.resetContent();
-
-		if (this._map && this._map.formulabar && this._map.formulabar.hasFocus())
-			this._map.formulabar.setValue('');
 
 		// avoid setting the focus keyboard
 		if (!noSelect && document.getElementById(this._textArea.id)) {
@@ -820,6 +896,7 @@ L.TextInput = L.Layer.extend({
 		}
 
 		this._fancyLog('empty-area-end');
+		this._statusLog('_emptyArea ]');
 		this._ignoreInputCount--;
 	},
 
@@ -844,7 +921,15 @@ L.TextInput = L.Layer.extend({
 		this._isComposing = false;
 		if (ev.data && ev.data.charCodeAt(ev.data.length-1) === 10) // 10 === charCode('\n')
 			this._newlineHint = true;
+		if (this.hasAccessibilitySupport()) {
+			if (!this._isWrappedBySpan()) {
+				this._restoreSpanWrapper();
+			}
+		}
 		this._onInput(ev);
+		if (this.hasAccessibilitySupport()) {
+			this._updateFocusedParagraph();
+		}
 	},
 
 	// Called when the user goes back to a word to spellcheck or replace it,
@@ -855,13 +940,21 @@ L.TextInput = L.Layer.extend({
 		this._fancyLog('abort-composition', ev.type);
 		if (this._isComposing)
 			this._isComposing = false;
-		this._emptyArea((document.activeElement !== this._textArea)
-			&& (!this._map.formulabar || !this._map.formulabar.hasFocus()));
+		if (this.hasAccessibilitySupport()) {
+			this._isLeftRightArrow = 0;
+			this._updateFocusedParagraph();
+			this._requestFocusedParagraph();
+		} else {
+			this._emptyArea(document.activeElement !== this._textArea);
+		}
 	},
 
 	_onKeyDown: function(ev) {
 		if (this._map.uiManager.isUIBlocked())
 			return;
+
+		if (app.UI.notebookbarAccessibility)
+			app.UI.notebookbarAccessibility.onDocumentKeyDown(ev);
 
 		if (ev.keyCode === 8)
 			this._deleteHint = 'backspace';
@@ -872,6 +965,105 @@ L.TextInput = L.Layer.extend({
 		}
 		this._newlineHint = ev.keyCode === 13;
 		this._linebreakHint = this._newlineHint && ev.shiftKey;
+
+		// In Firefox 117 and greater no copy/cut input event is emitted when CTRL+C/X is pressed
+		// with no selection in a text element with contenteditable='true'. Since no copy/cut event
+		// is emitted, Clipboard.copy/cut is never invoked. So we need to emit it manually.
+		// To be honest it seems a Firefox bug. We need to check if they fix it in later version.
+		if (!this.hasAccessibilitySupport() && !L.Browser.win &&
+			L.Browser.gecko && L.Browser.geckoVersion >= '117.0' &&
+			ev.ctrlKey && window.getSelection().isCollapsed) {
+			if (ev.key === 'c') {
+				document.execCommand('copy');
+			}
+			else if (ev.key === 'x') {
+				document.execCommand('cut');
+			}
+		}
+
+		if (this.hasAccessibilitySupport()) {
+			if ((this._hasAnySelection && !this._isEditingInSelection && this._map.getDocType() !== 'spreadsheet') ||
+				(!this._hasAnySelection && this._map.getDocType() === 'presentation')) {
+				if (!L.browser.cypressTest) {
+					var allowedKeyEvent =
+						this._map.keyboard.allowedKeyCodeWhenNotEditing[ev.keyCode] ||
+						ev.ctrlKey ||
+						ev.altKey ||
+						(this._newlineHint && ev.shiftKey);
+					if (!allowedKeyEvent) {
+						window.console.log('TextInput._onKeyDown: any input default prevented since no shape editing is active.');
+						ev.preventDefault();
+					}
+				}
+			}
+			// In order to allow screen reader to track caret navigation properly even if there is some connection delay
+			// default behaviour for Left/Right arrow key press is no more prevented in Map.Keyboard._handleKeyEvent,
+			// Here we set _isLeftRightArrow flag and handle some special cases.
+			else {
+				this._isLeftRightArrow = 0;
+				if (ev.key === 'ArrowLeft') {
+					this._isLeftRightArrow = -1;
+				} else if (ev.key === 'ArrowRight') {
+					this._isLeftRightArrow = 1;
+				}
+
+				// If we are at paragraph begin/end and left/right arrow is pressed, we need to prevent default behaviour
+				if (this._isLeftRightArrow) {
+					clearTimeout(this._onNavigationEndTimeout);
+					if (!this._isSelectionValid() || this._isComposing ||
+						(this._isLeftRightArrow > 0 && this._isCursorAtEnd()) ||
+						(this._isLeftRightArrow < 0 && this._isCursorAtStart())) {
+						this._log('_onKeyDown: preventDefault');
+						ev.preventDefault();
+					}
+				}
+
+				if (this._isLeftRightArrow) {
+					if (this._listPrefixLength > 0) {
+						var cursorPosition = this._getSelectionEnd();
+						if (cursorPosition === this._listPrefixLength && this._isLeftRightArrow < 0) {
+							// if caret is at begin of list entry content: "1. |Item 1" and shift+left arrow is pressed,
+							// then caret is moved at the end of previous paragraph, if any; or it's not moved at all
+							// if we are at the document beginning; so we only need to prevent default behaviour
+							ev.preventDefault();
+							if (!ev.shiftKey) {
+								// when shift is not pressed, caret is moved ahead of list prefix: "|1. Item 1",
+								// selection is cleared, if any
+								this._updateCursorPosition(0);
+							}
+						}
+						// if caret is ahead of list prefix: "|1. Item 1" and right arrow is pressed, with or without shift,
+						// caret is moved at begin of list entry content: "1. |Item 1", nothing is selected
+						if (cursorPosition === 0 && this._isLeftRightArrow > 0) {
+							ev.preventDefault();
+							this._updateCursorPosition(this._listPrefixLength);
+						}
+					}
+
+					// When left/right arrow is pressed and text is selected, selection is cleared
+					// and caret needs to be moved by one char left/right.
+					// However, for an editable div the behaviour is different:
+					// - when left arrow is pressed caret moves at start of previously selected text
+					// - when right arrow is pressed caret moves at end of previously selected text
+					// So we need to prevent default behaviour and simulate the same behaviour that occurs in LibreOffice.
+					if (!ev.shiftKey) {
+						var selection = window.getSelection();
+						if (!selection.isCollapsed) {
+							// The case where a left arrow is pressed with caret at the beginning of a list entry content
+							// is already handled earlier.
+							if (!(this._listPrefixLength > 0 &&
+								this._lastCursorPosition === this._listPrefixLength && this._isLeftRightArrow < 0)) {
+								this._log('_onKeyDown: pressed left/right arrows with selected text');
+								ev.preventDefault();
+								var pos = this._lastCursorPosition + this._isLeftRightArrow;
+								// _updateCursorPosition takes care to normalize pos value
+								this._updateCursorPosition(pos);
+							}
+						}
+					}
+				}
+			}
+		}
 
 		// We want to open drowdown menu when cursor is above a dropdown content control.
 		if (ev.code === 'Space' || ev.code === 'Enter') {
@@ -888,7 +1080,7 @@ L.TextInput = L.Layer.extend({
 			// This is the key combination (Alt+C or Alt+Shift+C) for focusing on the comment menu.
 
 			// On Calc, first press opens the comment, second press focuses on it.
-			var section = app.sectionContainer.getSectionWithName(L.CSections.CommentList.name);
+			section = app.sectionContainer.getSectionWithName(L.CSections.CommentList.name);
 			if (section) {
 				if (section.sectionProperties.selectedComment) {
 					var id = section.sectionProperties.selectedComment.sectionProperties.menu.id;
@@ -930,19 +1122,39 @@ L.TextInput = L.Layer.extend({
 	// Across browsers, arrow up/down / home / end would move the caret to
 	// the beginning/end of the textarea/contenteditable.
 	_onKeyUp: function(ev) {
-		// We also add this handler here because keyup event is not fired for page when map is active.
-		document.body.classList.remove('activate-underlines');
-
 		if (this._map.uiManager.isUIBlocked())
 			return;
 
 		app.idleHandler.notifyActive();
-		if (!this._isComposing && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight' ||
+		if (!this.hasAccessibilitySupport() && !this._isComposing &&
+			(ev.key === 'ArrowLeft' || ev.key === 'ArrowRight' ||
 			ev.key === 'ArrowUp' || ev.key === 'ArrowDown' ||
 			ev.key === 'Home' || ev.key === 'End' ||
 			ev.key === 'PageUp' || ev.key === 'PageDown' ||
-			ev.key === 'Escape'))
+			ev.key === 'Escape')) {
 			this._emptyArea();
+		}
+
+		if (this.hasAccessibilitySupport()) {
+			if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') {
+				clearTimeout(this._onNavigationEndTimeout);
+				this._onNavigationEndTimeout = setTimeout(function () {
+					if (this._isLeftRightArrow) {
+						this._isLeftRightArrow = 0;
+						this._updateFocusedParagraph();
+					}
+				}.bind(this), 1000);
+			}
+			else if (ev.key === 'Shift') {
+				if (this._isLeftRightArrow/* && this._remotePosition !== undefined*/) {
+					this._isLeftRightArrow = 0;
+					this._updateFocusedParagraph();
+				}
+			}
+		}
+
+		if (app.UI.notebookbarAccessibility)
+			app.UI.notebookbarAccessibility.onDocumentKeyUp(ev);
 	},
 
 	// Used in the deleteContentBackward for deleting multiple characters with a single
@@ -962,24 +1174,15 @@ L.TextInput = L.Layer.extend({
 	},
 
 	// Tiny helper - encapsulates sending a 'textinput' websocket message.
-	// sends a pair of "input" for a composition update paird with an "end"
+	// sends a pair of "input" for a composition update pair with an "end"
 	_sendCompositionEvent: function(text) {
-		if (false) {
-			var s = '[';
-			for (var ii = 0; ii < text.length; ++ii) {
-				if (ii > 0)
-					s = s + ',';
-				s = s + '0x' + text.charCodeAt(ii).toString(16);
-			}
-			s = s + ']';
-			window.app.console.log('L.TextInput._sendCompositionEvent: ' + s);
-		}
+		// this._logCharCodeSequence(text);
 
 		// We want to trigger auto-correction, but not if we may
 		// have to delete a count of characters in the future,
 		// which is specific to crazy mobile keyboard / IMEs:
 		if (!window.mode.isMobile() && !window.mode.isTablet() &&
-		    this._autoCorrectChars[text])
+			this._autoCorrectChars[text])
 		{
 			var codes = this._autoCorrectChars[text];
 			this._sendKeyEvent(codes[0], codes[1], 'input');
@@ -1000,21 +1203,21 @@ L.TextInput = L.Layer.extend({
 		if (!type) {
 			type = 'input';
 		}
-		if (this._map.editorHasFocus()) {
+		if (this._map.editorHasFocus() || this._hasFormulaBarFocus()) {
 			app.socket.sendMessage(
 				'key type=' + type + ' char=' + charCode + ' key=' + unoKeyCode + '\n'
 			);
 		} else {
 			app.socket.sendMessage(
 				'windowkey id=' +
-					this._map.getWinId() +
-					' type=' +
-					type +
-					' char=' +
-					charCode +
-					' key=' +
-					unoKeyCode +
-					'\n'
+				this._map.getWinId() +
+				' type=' +
+				type +
+				' char=' +
+				charCode +
+				' key=' +
+				unoKeyCode +
+				'\n'
 			);
 		}
 	},
@@ -1025,7 +1228,16 @@ L.TextInput = L.Layer.extend({
 		var unoKeyCode = this._linebreakHint ? 5376 : 1280;
 		this._sendKeyEvent(13, unoKeyCode);
 		this._newlineHint = false;
+		if (this.hasAccessibilitySupport()) {
+			var pos = this._getLastCursorPosition();
+			var empty = this._lastContent.length === 0;
+		}
 		this._emptyArea();
+		if (this.hasAccessibilitySupport()) {
+			this._setSelectionFlag(false);
+			if (pos === 0 && !empty)
+				this._requestFocusedParagraph();
+		}
 	},
 
 	_onCursorHandlerDragEnd: function(ev) {
@@ -1043,7 +1255,9 @@ L.TextInput = L.Layer.extend({
 	},
 
 	setSwitchedToEditMode: function() {
-		// for compatibility with A11yTextInput
+		if (this.hasAccessibilitySupport()) {
+			this._justSwitchedToEditMode = true;
+		}
 	},
 
 	_setAcceptInput: function(accept) {
@@ -1055,7 +1269,26 @@ L.TextInput = L.Layer.extend({
 			// is to track what we intended to do.
 			this._textArea.setAttribute('data-accept-input', accept);
 		}
-		this._acceptInput = accept;
+		if (!this.hasAccessibilitySupport()) {
+			this._acceptInput = accept;
+		}
+		else if (this._acceptInput !== accept) {
+			this._acceptInput = accept;
+			if (this._justSwitchedToEditMode && accept && this._isInitialContent()) {
+				// We need to make the paragraph at the cursor position focused in core
+				// so its content is sent to the editable area.
+				this._justSwitchedToEditMode = false;
+				if (this._map._docLayer && this._map._docLayer._visibleCursor) {
+					window.app.console.log('A11yTextInput._setAcceptInput: going to emit a synthetic click after switching to edit mode.');
+					var top = this._map._docLayer._visibleCursor.getNorthWest();
+					var bottom = this._map._docLayer._visibleCursor.getSouthWest();
+					var center = L.latLng((top.lat + bottom.lat) / 2, top.lng);
+					var cursorPos = this._map._docLayer._latLngToTwips(center);
+					this._map._docLayer._postMouseEvent('buttondown', cursorPos.x, cursorPos.y, 1, 1, 0);
+					this._map._docLayer._postMouseEvent('buttonup', cursorPos.x, cursorPos.y, 1, 1, 0);
+				}
+			}
+		}
 	},
 
 	_hasPreSpace: function() {
@@ -1080,6 +1313,16 @@ L.TextInput = L.Layer.extend({
 
 	_isSelectionValid: function() {
 		return typeof this._getSelectionStart() === 'number' && typeof this._getSelectionEnd() === 'number';
+	},
+
+	_isCursorAtStart: function() {
+		var selection = window.getSelection();
+		return selection.isCollapsed && this._getSelectionStart() === 0;
+	},
+
+	_isCursorAtEnd: function() {
+		var selection = window.getSelection();
+		return selection.isCollapsed && this._getSelectionEnd() === this.getPlainTextContent().length;
 	},
 
 	// When the cursor is on a text node return the position wrt the whole plain text content
@@ -1140,6 +1383,7 @@ L.TextInput = L.Layer.extend({
 	// start/end refer to the string represented by the whole plain text content
 	// it's not possible to set range start/end position at <img> delimiters
 	_setSelectionRange: function(start, end) {
+		this._statusLog('_setSelectionRange [');
 		var selection = window.getSelection();
 		selection.removeAllRanges();
 		var range = document.createRange();
@@ -1149,7 +1393,7 @@ L.TextInput = L.Layer.extend({
 			range.setStart(this._textArea, 1);
 			range.setEnd(this._textArea, 1);
 			selection.addRange(range);
-			window.console.log('_setSelectionRange: cursor set between pre-/post-space');
+			this._statusLog('_setSelectionRange ]');
 			return;
 		}
 
@@ -1169,7 +1413,7 @@ L.TextInput = L.Layer.extend({
 			end = t;
 		}
 		var msg = '_setSelectionRange:\n' +
-			      '    start: ' + start + ', end: ' + end +'\n';
+			'    start: ' + start + ', end: ' + end +'\n';
 
 		var startContainer = null;
 		var walker = document.createTreeWalker(this._textArea, NodeFilter.SHOW_TEXT);
@@ -1198,7 +1442,98 @@ L.TextInput = L.Layer.extend({
 		// Get the selection object and add the range to it
 		selection.addRange(range);
 		window.console.log(msg);
-		this._dbg('_setSelectionRange ]');
+		this._statusLog('_setSelectionRange ]');
+	},
+
+	_logCharCodeSequence: function(text) {
+		var s = '[';
+		for (var ii = 0; ii < text.length; ++ii) {
+			if (ii > 0)
+				s = s + ',';
+			s = s + '0x' + text.charCodeAt(ii).toString(16);
+		}
+		s = s + ']';
+		window.app.console.log('L.' + this._className + '._sendText: ' + s);
+	},
+
+	_log: function(msg) {
+		if (!this._isDebugOn)
+			return;
+		window.app.console.log(msg);
+	},
+
+	_statusLog: function(header) {
+		if (!this._isDebugOn)
+			return;
+
+		var msg = this._className + ' ' + header + '\n';
+		msg += '  _lastContent: ' + this._lastContent  +'\n';
+		msg += '  _lastContent: >' + this.codePointsToString(this._lastContent) + '<\n';
+		if (this.hasAccessibilitySupport()) {
+			msg += '  _remotePosition: ' + this._remotePosition + '\n';
+			msg += '  _lastCursorPosition: ' + this._getLastCursorPosition() + '\n';
+			msg += '  _lastSelectionStart: ' + this._lastSelectionStart + '\n';
+			msg += '  _lastSelectionEnd: ' + this._lastSelectionEnd + '\n';
+			msg += '  _hasSelection: ' + this._hasSelection + '\n';
+		}
+		msg += '  SelectionStart: ' + this._getSelectionStart() + '\n';
+		msg += '  SelectionEnd: ' + this._getSelectionEnd() + '\n';
+		msg += '  active element: ' + document.activeElement +'\n';
+		msg += '  _isComposing: ' + this._isComposing + '\n';
+		var textArea = this._textArea;
+		msg += '  editable element: ' + '\n';
+		msg += '    innerHTML: >' +  textArea.innerHTML + '<\n';
+		msg += '    innerText: >' +  textArea.innerText + '<\n';
+		msg += '    textContent: >' +  textArea.textContent + '<\n';
+		msg += '    has focus: ' + (textArea === document.activeElement) + '\n';
+		msg += '    has pre space: ' + this._hasPreSpace() + '\n';
+		msg += '    has post space: ' + this._hasPostSpace() + '\n';
+
+		var children = textArea.childNodes;
+		for (var i = 0; i < children.length; ++i) {
+			var child = children[i];
+			msg += '    child: ' + child + '\n';
+			if (child) {
+				msg += '      name: ' + child.nodeName + '\n';
+				msg += '      textContent: >' + child.textContent + '<\n';
+			}
+		}
+
+		var selection = window.getSelection();
+		msg += '  selection: \n';
+		msg += '    content: >' + selection.toString() + '<\n';
+		msg += '    range count: ' + selection.rangeCount + '\n';
+		msg += '    anchorNode: ' + selection.anchorNode + '\n';
+		if (selection.anchorNode) {
+			msg += '      name: ' + selection.anchorNode.nodeName + '\n';
+			msg += '      textContent: >' + selection.anchorNode.textContent + '<\n';
+			for (i = 0; i < children.length; ++i) {
+				if (children[i] === selection.anchorNode) {
+					msg += '      equal to child: ' + i + '\n';
+				} else if (children[i].contains(selection.anchorNode)) {
+					msg += '      contained in child: ' + i + '\n';
+				}
+			}
+		}
+		msg += '    focusNode: ' + selection.focusNode + '\n';
+		if (selection.focusNode) {
+			msg += '      name: ' + selection.focusNode.nodeName + '\n';
+			msg += '      textContent: >' + selection.focusNode.textContent + '<\n';
+			for (i = 0; i < children.length; ++i) {
+				if (children[i] === selection.focusNode) {
+					msg += '      equal to child: ' + i + '\n';
+				} else if (children[i].contains(selection.focusNode)) {
+					msg += '      contained in child: ' + i + '\n';
+				}
+			}
+		}
+		msg += '    editable element contains anchorNode: ' + textArea.contains(selection.anchorNode) + '\n';
+		msg += '    anchorNode == focusNode ? ' + (selection.anchorNode === selection.focusNode) + '\n';
+		msg += '    anchorOffset: ' + selection.anchorOffset + '\n';
+		msg += '    focusOffset: ' + selection.focusOffset + '\n';
+		msg += '    is collapsed: ' + selection.isCollapsed + '\n';
+
+		window.app.console.log(msg);
 	}
 });
 

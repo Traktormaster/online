@@ -95,7 +95,16 @@ public:
         _tracker.resetTileSeq(desc);
     }
 
-    bool sendTile(const TileDesc &desc, const Tile &tile)
+    // no tile data - just notify the client the ids/versions updated
+    bool sendUpdateNow(const TileDesc &desc)
+    {
+        TileWireId lastSentId = _tracker.updateTileSeq(desc);
+        std::string header = desc.serialize("update:", "\n");
+        LOG_TRC("Sending update from " << lastSentId << " to " << header);
+        return sendTextFrame(header.data(), header.size());
+    }
+
+    bool sendTileNow(const TileDesc &desc, const Tile &tile)
     {
         TileWireId lastSentId = _tracker.updateTileSeq(desc);
 
@@ -108,15 +117,13 @@ public:
         // FIXME: performance - optimize away this copy ...
         std::vector<char> output;
 
+        // copy in the header
         output.resize(header.size());
         std::memcpy(output.data(), header.data(), header.size());
-        if (tile->appendChangesSince(output, tile->isPng() ? 0 : lastSentId))
-        {
-            LOG_TRC(" Sending tile message: " << header << " lastSendId " << lastSentId);
-            return sendBinaryFrame(output.data(), output.size());
-        }
-        LOG_TRC("redundant tile request: " << lastSentId);
-        return true;
+
+        bool hasContent = tile->appendChangesSince(output, tile->isPng() ? 0 : lastSentId);
+        LOG_TRC("Sending tile message: " << header << " lastSendId " << lastSentId << " content " << hasContent);
+        return sendBinaryFrame(output.data(), output.size());
     }
 
     bool sendBlob(const std::string &header, const Blob &blob)
@@ -255,6 +262,10 @@ public:
     void sendLockedInfo();
 #endif
 
+#if ENABLE_FEATURE_RESTRICTION
+    void sendRestrictionInfo();
+#endif
+
     /// Process an SVG to replace embedded file:/// media URIs with public http URLs.
     std::string processSVGContent(const std::string& svg);
 
@@ -314,6 +325,8 @@ private:
     /// Removes the <meta name="origin" ...> tag which was added in
     /// ClientSession::postProcessCopyPayload().
     void preProcessSetClipboardPayload(std::string& payload);
+
+    void onTileProcessed(const std::string_view tileID);
 
 private:
     std::weak_ptr<DocumentBroker> _docBroker;

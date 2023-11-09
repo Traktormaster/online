@@ -56,6 +56,7 @@ using Poco::TemporaryFile;
 using Poco::URI;
 using Poco::Util::Application;
 
+bool EnableExperimental = false;
 static bool closeExpected = false;
 static std::mutex coutMutex;
 
@@ -240,6 +241,7 @@ namespace Util
     }
 }
 
+// coverity[root_function] : don't warn about uncaught exceptions
 POCO_APP_MAIN(Connect)
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

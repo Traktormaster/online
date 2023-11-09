@@ -20,6 +20,7 @@ lo_path="@LO_PATH@"
 valgrind_cmd="valgrind --tool=memcheck --trace-children=no -v --read-var-info=yes"
 verbose=''
 capabilities="@ENABLE_SETCAP@"
+fail_fast=''
 
 if test "h$capabilities" != "htrue"; then
     capabilities=false
@@ -38,6 +39,7 @@ print_help ()
     echo "   --trs-file <file>   Records the results of a test for automake (default /dev/stderr)"
     echo "   --gdb               Run under gdb if enabled"
     echo "   --valgrind          Run under valgrind if enabled"
+    echo "   --fail-fast         If a test fails, subsequent tests will not run and no report is generated"
     echo "   --verbose           Print out more stuff - if you run out of things to read"
     exit 1
 }
@@ -52,6 +54,7 @@ while test $# -gt 0; do
       --trs-file)  test_output=$2; shift;;
       --gdb)       trace='gdb --args'; shift;;
       --valgrind)  trace=$valgrind_cmd; shift;;
+      --fail-fast) fail_fast='true'; shift;;
       --verbose)   verbose="--verbose";;
       --help)      print_help ;;
   -*) ;; # ignore
@@ -86,10 +89,12 @@ if ${trace} \
 				   --o:ssl.ca_file_path="${abs_top_builddir}/etc/ca-chain.cert.pem" \
 				   --o:admin_console.username=admin --o:admin_console.password=admin \
 				   --o:storage.ssl.enable=false \
+				   --o:experimental_features=true \
 				   --unattended \
 				   --unitlib="${abs_top_builddir}/test/.libs/$tst.so" 2> "$tst_log" 1>&2; then
 	echo "Test $tst passed. Finished in ${SECONDS}s."
 	echo ":test-result: PASS $tst" >> $test_output
+	exit 0
 else
 	echo "Test $tst FAILED. Finished in ${SECONDS}s."
 	cat $tst_log
@@ -111,6 +116,10 @@ else
 	echo "   $ less $tst_log # for detailed failure log files"
 	echo "============================================================="
 	echo ":test-result: FAIL $tst" >> $test_output
+fi
+
+if test "z$fail_fast" == "ztrue"; then
+    exit 1
 fi
 
 # vim:set shiftwidth=4 expandtab:

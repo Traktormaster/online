@@ -1,5 +1,11 @@
 /* -*- js-indent-level: 8 -*- */
 /*
+ * Copyright the Collabora Online contributors.
+ *
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
+/*
  * JSDialog.MenuButton - button which can trigger some action or open a menu
  *
  * Example JSON:
@@ -11,22 +17,71 @@
  *     command: '.uno:Command',
  *     enabled: false
  * }
- *
- * Copyright the Collabora Online contributors.
- *
- * SPDX-License-Identifier: MPL-2.0
  */
 
 /* global JSDialog $ */
 
+function _makeW2MenuFocusable(id, control, menu) {
+	var element = document.getElementById(id);
+	var rows = element.getElementsByTagName('tr');
+	rows = Array.from(rows);
+
+	if (rows.length > 0) {
+		var tabStartIndex = 1000; // Shouldn't be 0 (zero).
+		// Loop focus inside menu - start.
+		var parentNode = rows[0].parentNode;
+		var trBegin = document.createElement('tr');
+		trBegin.tabIndex = tabStartIndex - 1;
+		trBegin.id = id + '-beginning';
+		parentNode.insertBefore(trBegin, parentNode.children[0]);
+
+		var trEnd = document.createElement('tr');
+		trEnd.id = id + '-ending';
+		trEnd.tabIndex = tabStartIndex + rows.length;
+		parentNode.appendChild(trEnd);
+
+		trBegin.addEventListener('focusin', function() {
+			rows[rows.length - 1].focus();
+		});
+
+		trEnd.addEventListener('focusin', function() {
+			rows[0].focus();
+		});
+		// Loop focus inside menu - end.
+
+		trEnd.focus();
+
+		rows.forEach(function(row, index) {
+			if (!menu[index].type || (menu[index].type !== 'break' && menu[index].type !== 'separator'))
+				row.tabIndex = index + tabStartIndex;
+
+			row.addEventListener('keydown', function(event) {
+				var elementToHide = document.getElementById(id);
+				if (event.code === 'Escape') {
+					if (elementToHide) {
+						elementToHide.style.display = 'none';
+						control.button.focus();
+					}
+				}
+			});
+		});
+	}
+}
+
 function _menubuttonControl (parentContainer, data, builder) {
-	var ids = data.id.split(':');
-
+	var ids;
 	var menuId = null;
-	if (ids.length > 1)
-		menuId = ids[1];
 
-	data.id = ids[0];
+	if (data.id.includes(':')) {
+		ids = data.id.split(':');
+		menuId = ids[1];
+	}
+	else if (data.id.includes('-')) {
+		ids = data.id.split('-');
+		menuId = ids[1];
+	}
+	else
+		menuId = data.id;
 
 	// import menu
 	if (data.menu) {
@@ -61,14 +116,17 @@ function _menubuttonControl (parentContainer, data, builder) {
 				onSelect: function (event) {
 					if (event.item.uno)
 						builder.map.sendUnoCommand('.uno:' + event.item.uno);
+					else if (event.item.type === 'action')
+						builder.map.dispatch(event.item.id);
 					else
 						builder.callback('menubutton', 'select', control.container, event.item.id, builder);
 				}
 			});
+			_makeW2MenuFocusable('w2ui-overlay', control, builder._menus[menuId]);
 		});
 
 		builder.options.noLabelsForUnoButtons = noLabels;
-	} else if (data.text || data.image) {
+	} else if (data.text !== undefined || data.image) {
 		var button = L.DomUtil.create('button', 'menubutton ' + builder.options.cssClass, parentContainer);
 		button.id = data.id;
 		button.setAttribute('aria-haspopup', true);
@@ -83,6 +141,9 @@ function _menubuttonControl (parentContainer, data, builder) {
 		$(button).click(function () {
 			builder.callback('menubutton', 'toggle', button, undefined, builder);
 		});
+
+		if (data.enabled === false)
+			button.setAttribute('disabled', true);
 	} else {
 		window.app.console.warn('Not found menu "' + menuId + '"');
 	}

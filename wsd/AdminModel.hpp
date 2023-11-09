@@ -14,7 +14,6 @@
 #include <set>
 #include <string>
 #include <utility>
-
 #include <Poco/URI.h>
 
 #include <common/Log.hpp>
@@ -27,12 +26,13 @@ struct DocumentAggregateStats;
 class View
 {
 public:
-    View(std::string sessionId, std::string userName, std::string userId)
+    View(std::string sessionId, std::string userName, std::string userId, bool readOnly)
         : _sessionId(std::move(sessionId))
         , _userName(std::move(userName))
         , _userId(std::move(userId))
         , _start(std::time(nullptr))
         , _loadDuration(0)
+        , _readOnly(readOnly)
     {
     }
 
@@ -43,6 +43,7 @@ public:
     bool isExpired() const { return _end != 0 && std::time(nullptr) >= _end; }
     std::chrono::milliseconds getLoadDuration() const { return _loadDuration; }
     void setLoadDuration(std::chrono::milliseconds loadDuration) { _loadDuration = loadDuration; }
+    bool isReadOnly() const { return _readOnly; }
 
 private:
     const std::string _sessionId;
@@ -51,6 +52,7 @@ private:
     const std::time_t _start;
     std::time_t _end = 0;
     std::chrono::milliseconds _loadDuration;
+    bool _readOnly = false;
 };
 
 struct DocCleanupSettings
@@ -155,12 +157,13 @@ class Document
     Document& operator = (const Document &) = delete;
 
 public:
-    Document(std::string docKey, pid_t pid, std::string filename, Poco::URI wopiSrc)
-        : _docKey(std::move(docKey))
+    Document(const std::string& docKey, pid_t pid,
+             const std::string& filename, const Poco::URI& wopiSrc)
+        : _docKey(docKey)
         , _pid(pid)
         , _activeViews(0)
-        , _filename(std::move(filename))
-        , _wopiSrc(std::move(wopiSrc))
+        , _filename(filename)
+        , _wopiSrc(wopiSrc)
         , _memoryDirty(0)
         , _lastJiffy(0)
         , _lastCpuPercentage(0)
@@ -203,7 +206,7 @@ public:
 
     std::time_t getIdleTime() const { return std::time(nullptr) - _lastActivity; }
 
-    void addView(const std::string& sessionId, const std::string& userName, const std::string& userId);
+    void addView(const std::string& sessionId, const std::string& userName, const std::string& userId, bool readOnly);
 
     int expireView(const std::string& sessionId);
 
@@ -385,7 +388,7 @@ public:
 
     void addDocument(const std::string& docKey, pid_t pid, const std::string& filename,
                      const std::string& sessionId, const std::string& userName, const std::string& userId,
-                     const int smapsFD, const Poco::URI& wopiSrc);
+                     const int smapsFD, const Poco::URI& wopiSrc, bool readOnly);
 
     void removeDocument(const std::string& docKey, const std::string& sessionId);
     void removeDocument(const std::string& docKey);
@@ -423,6 +426,16 @@ public:
     static int getAssignedKitPids(std::vector<int> *pids);
     static int getUnassignedKitPids(std::vector<int> *pids);
     static int getKitPidsFromSystem(std::vector<int> *pids);
+    bool isDocSaved(const std::string&);
+    bool isDocReadOnly(const std::string&);
+    void setMigratingInfo(const std::string& docKey, const std::string& routeToken, const std::string& serverId);
+    void resetMigratingInfo();
+    std::string getCurrentMigDoc() { return _currentMigDoc; }
+    std::string getCurrentMigToken() { return _currentMigToken; }
+    std::string getTargetMigServerId() { return _targetMigServerId; }
+    void sendMigrateMsgAfterSave(bool lastSaveSuccessful, const std::string& docKey);
+    std::string getWopiSrcMap();
+    std::string getFilename(int pid);
 
 private:
     void doRemove(std::map<std::string, std::unique_ptr<Document>>::iterator &docIt);
@@ -471,6 +484,12 @@ private:
     std::thread::id _owner;
 
     DocProcSettings _defDocProcSettings;
+
+    std::string _currentMigDoc = std::string();
+
+    std::string _currentMigToken = std::string();
+
+    std::string _targetMigServerId = std::string();
 };
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

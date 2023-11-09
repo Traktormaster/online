@@ -1,5 +1,5 @@
 /* -*- js-indent-level: 8 -*- */
-/* global Uint8Array */
+/* global Uint8Array _ */
 
 /*
 	For extending window.app object, please see "docstate.js" file.
@@ -454,6 +454,18 @@ if (window.useParentFrameSocket) {
 	var navigatorLang = navigator.languages && navigator.languages.length ? navigator.languages[0] :
 	    (navigator.language || navigator.userLanguage || navigator.browserLanguage || navigator.systemLanguage);
 
+	function getFirefoxVersion() {
+		var version = '';
+
+		var userAgent = navigator.userAgent.toLowerCase();
+		if (userAgent.indexOf('firefox') !== -1) {
+			var matches = userAgent.match(/firefox\/([0-9]+\.*[0-9]*)/);
+			if (matches) {
+				version = matches[1];
+			}
+		}
+		return version;
+	}
 
 	global.L = {};
 
@@ -486,6 +498,10 @@ if (window.useParentFrameSocket) {
 		// @property gecko: Boolean
 		// `true` for gecko-based browsers like Firefox.
 		gecko: gecko,
+
+		// @property geckoVersion: String
+		// Firefox version: abc.d.
+		geckoVersion: getFirefoxVersion(),
 
 		// @property android: Boolean
 		// `true` for any browser running on an Android platform.
@@ -591,7 +607,7 @@ if (window.useParentFrameSocket) {
 				return true;
 			}
 
-			return L.Browser.mobile && (window.innerWidth < 768 || window.innerHeight < 768);
+			return L.Browser.mobile && (screen.width < 768 || screen.height < 768);
 		},
 		// Mobile device with big screen size.
 		isTablet: function() {
@@ -1051,12 +1067,33 @@ if (window.useParentFrameSocket) {
 			this.unloading = true;
 		};
 
+		this.sendPostMsg = function(errorCode) {
+			var errorMsg;
+			if (errorCode === 0) {
+				errorMsg = _('Cluster is scaling, please retry after few seconds');
+			} else if (errorCode === 1) {
+				errorMsg = _('Document is migrating to new server, please retry after few seconds');
+			} else {
+				errorMsg = _('Failed to get RouteToken from controller');
+			}
+			var msg = {
+				'MessageId': 'Action_Load_Resp',
+				'SendTime': Date.now(),
+				'Values': {
+					success: false,
+					errorMsg: errorMsg,
+				}
+			};
+			window.parent.postMessage(JSON.stringify(msg), '*');
+		};
+
 		var http = new XMLHttpRequest();
 		http.open('GET', global.indirectionUrl + '?Uri=' + encodeURIComponent(that.uri), true);
 		http.responseType = 'json';
 		http.addEventListener('load', function() {
 			if (this.status === 200) {
 				var uriWithRouteToken = http.response.uri;
+				global.expectedServerId = http.response.serverId;
 				var params = (new URL(uriWithRouteToken)).searchParams;
 				global.routeToken = params.get('RouteToken');
 				window.app.console.log('updated routeToken: ' + global.routeToken);
@@ -1081,8 +1118,17 @@ if (window.useParentFrameSocket) {
 					that.readyState = that.innerSocket.readyState;
 					that.onmessage(e);
 				};
+			} else if (this.status === 202) {
+				that.sendPostMsg(http.response.errorCode);
+				var timeoutFn = function (indirectionUrl, uri) {
+					console.warn('Requesting again for routeToken');
+					this.open('GET', indirectionUrl + '?Uri=' + encodeURIComponent(uri), true);
+					this.send();
+				}.bind(this);
+				setTimeout(timeoutFn, 10000, global.indirectionUrl, that.uri);
 			} else {
-				window.app.console.debug('Indirection url: error on incoming response ' + this.status);
+				window.app.console.error('Indirection url: error on incoming response ' + this.status);
+				that.sendPostMsg(-1);
 			}
 		});
 		http.send();
@@ -1096,7 +1142,7 @@ if (window.useParentFrameSocket) {
 		if (global.socketProxy) {
 			window.socketProxy = true;
 			return new global.ProxySocket(uri);
-		} else if (global.indirectionUrl != '') {
+		} else if (global.indirectionUrl != '' && !global.migrating) {
 			window.indirectSocket = true;
 			return new global.IndirectSocket(uri);
 		} else if (window.useParentFrameSocket) {
@@ -1287,6 +1333,10 @@ if (window.useParentFrameSocket) {
 					if (spellOnline) {
 						msg += ' spellOnline=' + spellOnline;
 					}
+
+					var accessibilityState = window.localStorage.getItem('accessibilityState') === 'true';
+					accessibilityState = accessibilityState || L.Browser.cypressTest;
+					msg += ' accessibilityState=' + accessibilityState;
 				}
 
 				msg += ' timezone=' + Intl.DateTimeFormat().resolvedOptions().timeZone;

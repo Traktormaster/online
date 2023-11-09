@@ -3,6 +3,8 @@
  * L.SVGGroup
  */
 
+/* global _ */
+
 L.SVGGroup = L.Layer.extend({
 
 	options: {
@@ -57,8 +59,10 @@ L.SVGGroup = L.Layer.extend({
 	addEmbeddedVideo: function(svgString) {
 		var svgDoc = this.parseSVG(svgString);
 
-		if (svgDoc.lastChild.localName !== 'foreignObject')
+		if (svgDoc.lastChild.localName !== 'foreignObject') {
+			console.error('Failed to parse svg for embedded video');
 			return;
+		}
 
 		var svgLastChild = svgDoc.lastChild;
 
@@ -76,6 +80,63 @@ L.SVGGroup = L.Layer.extend({
 		var point = this._map.latLngToLayerPoint(this._bounds.getNorthWest());
 		svgLastChild.setAttribute('x', point.x);
 		svgLastChild.setAttribute('y', point.y);
+
+		var videoContainer = svgLastChild.querySelector('body');
+		var videos = svgLastChild.getElementsByTagName('video');
+		this.addVideoSupportHandlers(videos);
+
+		function _fixSVGPos() {
+			var mat = svgLastChild.getScreenCTM();
+			var boundingBox = this._renderer._container.getBoundingClientRect();
+			videoContainer.style.transform = 'matrix(' + [mat.a, mat.b, mat.c, mat.d, mat.e - boundingBox.x, mat.f - boundingBox.y].join(', ') + ')';
+		}
+		var fixSVGPos = _fixSVGPos.bind(this);
+
+		if (L.Browser.safari) {
+			fixSVGPos();
+			var observer = new MutationObserver(fixSVGPos);
+
+			observer.observe(this._renderer._container, {
+				attributes: true
+			});
+		}
+	},
+
+	addVideoSupportHandlers: function(videos) {
+		if (!videos)
+			return;
+
+		var that = this;
+
+		// slide show may have more than one video and it does not require any selection
+		for (var i = 0; i < videos.length; i++) {
+			var video = videos[i];
+			var sources = video.getElementsByTagName('source');
+
+			video.addEventListener('playing', function() {
+				window.setTimeout(function() {
+					if (video.webkitDecodedFrameCount === 0) {
+						that.showUnsupportedVideoWarning();
+					}
+				}, 1000);
+			});
+
+			video.addEventListener('error', function() {
+				that.showUnsupportedVideoWarning();
+			});
+
+			if (sources.length) {
+				sources[0].addEventListener('error', function() {
+					that.showUnsupportedVideoWarning();
+				});
+			}
+		}
+
+	},
+
+	showUnsupportedVideoWarning: function() {
+		var videoWarning = _('Document contains unsupported video');
+		L.Map.THIS.uiManager.showSnackbar(videoWarning);
 	},
 
 	addEmbeddedSVG: function (svgString) {

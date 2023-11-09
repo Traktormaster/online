@@ -136,7 +136,12 @@ L.Control.UserList = L.Control.extend({
 		document.getElementById('userListSummary').addEventListener('click', function(e) {
 			e.stopPropagation();
 			$('.main-nav.hasnotebookbar').css('overflow', 'visible');
-			$('#userListPopover').show();
+			var selector = '#userListPopover';	
+			if ($(selector).is(':hidden')) {
+				$(selector).show();
+			} else {	
+				outsideClickListener(e);
+			}
 			document.addEventListener('click', outsideClickListener);
 		});
 	},
@@ -151,11 +156,13 @@ L.Control.UserList = L.Control.extend({
 	},
 
 	renderHeaderAvatars: function() {
-		if (!window.mode.isDesktop() || this.hideUserList() || this.options.listUser.length === 1) {
+		if (window.mode.isMobile() || this.hideUserList() || this.options.listUser.length === 1) {
+			document.getElementById('userListSummary').removeAttribute('accesskey');
 			return;
 		}
 
 		var headerUserList = this.options.listUser.slice(-this.options.userLimitHeader);
+		document.getElementById('userListSummary').setAttribute('accesskey','UP');
 
 		// Remove users that should no longer be in the header
 		Array.from(document.querySelectorAll('#userListSummary [data-view-id]')).map(function(element) {

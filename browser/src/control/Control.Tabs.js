@@ -105,13 +105,14 @@ L.Control.Tabs = L.Control.extend({
 					return !areTabsMultiple();
 				}
 			};
-
-			L.installContextMenu({
-				selector: '.spreadsheet-tab',
-				className: 'cool-font',
-				items: this._menuItem,
-				zIndex: 1000
-			});
+			    if (!this._map.isReadOnlyMode() || window.mode.isTablet()) {
+				L.installContextMenu({
+					selector: '.spreadsheet-tab',
+					className: 'cool-font',
+					items: this._menuItem,
+					zIndex: 1000
+				});
+			}
 		}
 
 		map.on('updateparts', this._updateDisabled, this);
@@ -156,19 +157,19 @@ L.Control.Tabs = L.Control.extend({
 					{
 						'insertsheetbefore' : this._menuItem['insertsheetbefore'],
 						'insertsheetafter'  :   this._menuItem['insertsheetafter'],
-						'.uno:Name' : this._menuItem['.uno:Name'],
+						'Name' : this._menuItem['.uno:Name'],
 					}
 				);
 				if (this._map.hasAnyHiddenPart()) {
 					Object.assign(menuItemMobile, {
-						'.uno:Show' : this._menuItem['.uno:Show'],
+						'Show' : this._menuItem['.uno:Show'],
 					});
 				}
 				if (this._map.getNumberOfVisibleParts() !== 1) {
 					Object.assign(menuItemMobile,
 						{
-							'.uno:Remove': this._menuItem['.uno:Remove'],
-							'.uno:Hide': this._menuItem['.uno:Hide'],
+							'Remove': this._menuItem['.uno:Remove'],
+							'Hide': this._menuItem['.uno:Hide'],
 							'movesheetleft': this._menuItem['movesheetleft'],
 							'movesheetright': this._menuItem['movesheetright'],
 						}
@@ -189,18 +190,25 @@ L.Control.Tabs = L.Control.extend({
 						continue;
 					var id = 'spreadsheet-tab' + i;
 					var tab = L.DomUtil.create('button', 'spreadsheet-tab', ssTabScroll);
-
-					if (window.mode.isMobile()) {
+					if (window.mode.isMobile() || window.mode.isTablet()) {
 						(new Hammer(tab, {recognizers: [[Hammer.Press]]}))
 							.on('press', function (j) {
 								return function(e) {
 									this._tabForContextMenu = j;
 									this._setPart(e);
-									window.contextMenuWizard = true;
-									if (!this._map.isReadOnlyMode()) this._map.fire('mobilewizard', {data: menuData});
+									if (!this._map.isReadOnlyMode()) {
+										if (window.mode.isMobile()) {
+											window.contextMenuWizard = true;
+											this._map.fire('mobilewizard', {data: menuData});
+										} else {
+											$(e.target).trigger('contextmenu');
+                                        }
+									}
 								};
 							}(i).bind(this));
-					} else {
+					}
+
+					if (!window.mode.isMobile()) {
 						L.DomEvent.on(tab, 'dblclick', function(j) {
 							return function() {
 								// window.app.console.err('Double clicked ' + j);

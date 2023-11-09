@@ -1,5 +1,11 @@
 /* -*- js-indent-level: 8 -*- */
 /*
+ * Copyright the Collabora Online contributors.
+ *
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
+/*
  * JSDialog.ScrolledWindow - container with scrollbars
  *
  * Example JSON:
@@ -20,18 +26,32 @@
  *     },
  *     children: [...]
  * }
- *
- * Copyright the Collabora Online contributors.
- *
- * SPDX-License-Identifier: MPL-2.0
  */
 
 /* global JSDialog */
+
+function _hasDrawingAreaInside(children) {
+	if (!children)
+		return false;
+
+	for (var i in children) {
+		if (children[i].type === 'drawingarea')
+			return true;
+		if (_hasDrawingAreaInside(children[i].children))
+			return true;
+	}
+
+	return false;
+}
 
 function _scrolledWindowControl(parentContainer, data, builder) {
 	var scrollwindow = L.DomUtil.create('div', builder.options.cssClass + ' ui-scrollwindow', parentContainer);
 	if (data.id)
 		scrollwindow.id = data.id;
+
+	// drawing areas inside scrollwindows should be not cropped so we add special class
+	if (_hasDrawingAreaInside(data.children))
+		L.DomUtil.addClass(scrollwindow, 'has-ui-drawing-area');
 
 	var content = L.DomUtil.create('div', builder.options.cssClass + ' ui-scrollwindow-content', scrollwindow);
 

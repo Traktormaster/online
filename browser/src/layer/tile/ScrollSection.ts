@@ -539,10 +539,22 @@ export class ScrollSection extends CanvasSectionObject {
 		}
 	}
 
+	private increaseScrollBarThickness () : void {
+		this.sectionProperties.scrollBarThickness = 8 * app.roundedDpiScale;
+		this.containerObject.requestReDraw();
+	}
+
+	private decreaseScrollBarThickness () : void {
+		this.sectionProperties.scrollBarThickness = 6 * app.roundedDpiScale;
+		this.containerObject.requestReDraw();
+	}
+
 	private hideVerticalScrollBar (): void {
 		if (this.sectionProperties.mouseIsOnVerticalScrollBar) {
 			this.sectionProperties.mouseIsOnVerticalScrollBar = false;
 			this.sectionProperties.mapPane.style.cursor = this.sectionProperties.defaultCursorStyle;
+
+			this.decreaseScrollBarThickness();
 
 			if (!(<any>window).mode.isDesktop()) { // On desktop, we don't want to hide the vertical scroll bar.
 				this.sectionProperties.drawVerticalScrollBar = false;
@@ -564,6 +576,14 @@ export class ScrollSection extends CanvasSectionObject {
 			this.sectionProperties.drawVerticalScrollBar = true;
 			this.sectionProperties.mouseIsOnVerticalScrollBar = true;
 			this.sectionProperties.mapPane.style.cursor = 'pointer';
+
+			// Prevent Instant Mouse hover
+			setTimeout(() => {
+				if (this.sectionProperties.mouseIsOnVerticalScrollBar) {
+					this.increaseScrollBarThickness();
+				}
+			}, 100);
+
 			if (!this.containerObject.isDraggingSomething() && !(<any>window).mode.isDesktop())
 				this.containerObject.requestReDraw();
 		}
@@ -573,6 +593,8 @@ export class ScrollSection extends CanvasSectionObject {
 		if (this.sectionProperties.mouseIsOnHorizontalScrollBar) {
 			this.sectionProperties.mouseIsOnHorizontalScrollBar = false;
 			this.sectionProperties.mapPane.style.cursor = this.sectionProperties.defaultCursorStyle;
+
+			this.decreaseScrollBarThickness();
 
 			if (!(<any>window).mode.isDesktop()) {
 				this.sectionProperties.drawHorizontalScrollBar = false;
@@ -594,6 +616,14 @@ export class ScrollSection extends CanvasSectionObject {
 			this.sectionProperties.drawHorizontalScrollBar = true;
 			this.sectionProperties.mouseIsOnHorizontalScrollBar = true;
 			this.sectionProperties.mapPane.style.cursor = 'pointer';
+
+			// Prevent Instant Mouse hover
+			setTimeout(() => {
+				if (this.sectionProperties.mouseIsOnHorizontalScrollBar) {
+					this.increaseScrollBarThickness();
+				}
+			}, 100);
+
 			if (!this.containerObject.isDraggingSomething() && !(<any>window).mode.isDesktop())
 				this.containerObject.requestReDraw();
 		}
@@ -642,19 +672,21 @@ export class ScrollSection extends CanvasSectionObject {
 		if (offset > 0) {
 			if (this.documentTopLeft[1] + offset > this.sectionProperties.yMax)
 				offset = this.sectionProperties.yMax - this.documentTopLeft[1];
-			if (offset < 0)
+			if (offset <= 0)
 				go = false;
 		}
 		else {
 			if (this.documentTopLeft[1] + offset < this.sectionProperties.yMin)
 				offset = this.sectionProperties.yMin - this.documentTopLeft[1];
-			if (offset > 0)
+			if (offset >= 0)
 				go = false;
 		}
 
 		if (go) {
+			app.sectionContainer.pauseDrawing();
 			this.map.scroll(0, offset / app.dpiScale, {});
 			this.onUpdateScrollOffset();
+			app.sectionContainer.resumeDrawing();
 			if (app.file.fileBasedView)
 				this.map._docLayer._checkSelectedPart();
 		}
@@ -665,19 +697,21 @@ export class ScrollSection extends CanvasSectionObject {
 		if (offset > 0) {
 			if (this.documentTopLeft[0] + offset > this.sectionProperties.xMax)
 				offset = this.sectionProperties.xMax - this.documentTopLeft[0];
-			if (offset < 0)
+			if (offset <= 0)
 				go = false;
 		}
 		else {
 			if (this.documentTopLeft[0] + offset < this.sectionProperties.xMin)
 				offset = this.sectionProperties.xMin - this.documentTopLeft[0];
-			if (offset > 0)
+			if (offset >= 0)
 				go = false;
 		}
 
 		if (go) {
+			app.sectionContainer.pauseDrawing();
 			this.map.scroll(offset / app.dpiScale, 0, {});
 			this.onUpdateScrollOffset();
+			app.sectionContainer.resumeDrawing();
 		}
 	}
 
@@ -809,6 +843,7 @@ export class ScrollSection extends CanvasSectionObject {
 		if (!(<any>window).mode.isDesktop())
 			return;
 
+		L.DomUtil.addClass(document.documentElement, 'prevent-select');
 		var props = this.getVerticalScrollProperties();
 		var midY = (props.startY + props.startY + props.scrollSize - this.sectionProperties.scrollBarThickness) * 0.5;
 
@@ -841,6 +876,7 @@ export class ScrollSection extends CanvasSectionObject {
 		if (!(<any>window).mode.isDesktop())
 			return;
 
+		L.DomUtil.addClass(document.documentElement, 'prevent-select');
 		var props = this.getHorizontalScrollProperties();
 		const sizeX = props.scrollSize - this.sectionProperties.scrollBarThickness;
 		const docWidth: number = this.map.getPixelBoundsCore().getSize().x;
@@ -937,6 +973,7 @@ export class ScrollSection extends CanvasSectionObject {
 	}
 
 	public onMouseUp (point: Array<number>, e: MouseEvent): void {
+		L.DomUtil.removeClass(document.documentElement, 'prevent-select');
 		this.map.scrollingIsHandled = false;
 		this.clearQuickScrollTimeout();
 

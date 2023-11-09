@@ -1,9 +1,12 @@
+/* -*- js-indent-level: 8 -*- */
 /* global require cy Cypress */
 
-require('cypress-failed-log');
 require('cypress-wait-until');
 require('cypress-file-upload');
 require('cypress-iframe');
+import installLogsCollector from 'cypress-terminal-report/src/installLogsCollector';
+
+installLogsCollector();
 
 if (Cypress.env('INTEGRATION') === 'php-proxy') {
 	Cypress.Server.defaults({
@@ -15,13 +18,37 @@ if (Cypress.env('INTEGRATION') === 'php-proxy') {
 
 var COMMAND_DELAY = 1000;
 
-if (Cypress.browser.isHeaded) {
-	// To debug exceptions more easily - enable this:
-	Cypress.on('fail', () => {
-		// eslint-disable-next-line no-debugger
-		//debugger;
+// Ignore exceptions coming from nextcloud.
+if (Cypress.env('INTEGRATION') === 'nextcloud') {
+	Cypress.on('uncaught:exception', function() {
+		return false;
+	});
+} else {
+	Cypress.on('window:before:load', function(appWindow) {
+		appWindow.addEventListener('error', function(event) {
+			Cypress.log({ name:'error:',
+				      message: (event.error.message ? event.error.message : 'no message')
+				      + '\n' + (event.error.stack ? event.error.stack : 'no stack') });
+		});
+
 	});
 }
+
+Cypress.on('fail', function(error) {
+	Cypress.log({ name:'fail:',
+		      message: error.codeFrame.absoluteFile + ':'
+		      + error.codeFrame.line + ':'
+		      + error.codeFrame.column + '\n'
+		      + error.codeFrame.frame });
+
+	//https://stackoverflow.com/a/63519375/1592055
+	//returning false here prevents Cypress from failing the test */
+	if (error.message.includes('ResizeObserver loop limit exceeded')) {
+		return false;
+	}
+
+	throw error;
+});
 
 if (Cypress.browser.isHeaded) {
 	const runCommand = cy.queue.runCommand.bind(cy.queue);

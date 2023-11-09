@@ -23,7 +23,7 @@ L.CalcTileLayer = L.CanvasTileLayer.extend({
 
 		for (var i = 0; i < commentList.length; i++) {
 			if (this._cellCursorTwips.contains(commentList[i].sectionProperties.data.cellPos)) {
-				if (commentList[i].tab == this._selectedPart) {
+				if (commentList[i].sectionProperties.data.tab == this._selectedPart) {
 					comment = commentList[i];
 					break;
 				}
@@ -39,6 +39,10 @@ L.CalcTileLayer = L.CanvasTileLayer.extend({
 				dateTime: new Date().toDateString(),
 				author: this._map.getViewName(this._viewId)
 			};
+
+			if (app.sectionContainer.doesSectionExist('new comment')) // If adding a new comment has failed, we need to remove the leftover.
+				app.sectionContainer.removeSection('new comment');
+
 			comment = app.sectionContainer.getSectionWithName(L.CSections.CommentList.name).add(newComment);
 			comment.show();
 		}
@@ -199,25 +203,11 @@ L.CalcTileLayer = L.CanvasTileLayer.extend({
 			var bounds = this._coordsToTileBounds(coords);
 			if (coords.part === command.part && coords.mode === command.mode &&
 				invalidBounds.intersects(bounds)) {
-				if (this._tiles[key]._invalidCount) {
-					this._tiles[key]._invalidCount += 1;
-				}
-				else {
-					this._tiles[key]._invalidCount = 1;
-				}
 				var intersectsVisible = visibleArea ? visibleArea.intersects(bounds) : bounds.intersectsAny(visiblePaneAreas);
 				if (intersectsVisible) {
 					needsNewTiles = true;
-					if (this._debug) {
-						this._debugAddInvalidationData(this._tiles[key]);
-					}
 				}
-				else {
-					// tile outside of the visible area, remove it.
-					// FIXME: keep it around and mark it old,
-					// so we fetch new if made visible ?
-					this._removeTile(key);
-				}
+				this._invalidateTile(key, command.wireId);
 			}
 		}
 
@@ -255,7 +245,7 @@ L.CalcTileLayer = L.CanvasTileLayer.extend({
 		this.setSplitPosFromCell();
 		this._map.fire('zoomchanged');
 		this.refreshViewData();
-		this._replayPrintTwipsMsgs();
+		this._replayPrintTwipsMsgs(false);
 		app.socket.sendMessage('commandvalues command=.uno:ViewAnnotationsPosition');
 	},
 
@@ -269,25 +259,32 @@ L.CalcTileLayer = L.CanvasTileLayer.extend({
 		var newDocWidth = Math.min(maxDocSize.x, this._docWidthTwips);
 		var newDocHeight = Math.min(maxDocSize.y, this._docHeightTwips);
 
-		var mapPosX = this._map._getTopLeftPoint().x;
-		var mapPosY = this._map._getTopLeftPoint().y;
-		var mapSize = this._map.getSize();
-
 		var lastCellPixel = this.sheetGeometry.getCellRect(this._lastColumn, this._lastRow);
 		var isCalcRTL = this._map._docLayer.isCalcRTL();
 		lastCellPixel = isCalcRTL ? lastCellPixel.getBottomRight() : lastCellPixel.getBottomLeft();
 		var lastCellTwips = this._corePixelsToTwips(lastCellPixel);
-		var mapSizeTwips = this._corePixelsToTwips(mapSize);
+		var mapSizeTwips = this._corePixelsToTwips(this._map.getSize());
+		var mapPosTwips = this._corePixelsToTwips(this._map._getTopLeftPoint());
 
-		var limitWidth = mapPosX + mapSize.x < lastCellPixel.x;
-		var limitHeight = mapPosY + mapSize.y < lastCellPixel.y;
+		// margin outside data area we allow to scroll
+		// has to be bigger on mobile to allow scroll
+		// to the next place where we extend that area
+		// (allow few mobile screens down and right)
+		var limitMargin = mapSizeTwips;
+		if (!window.mode.isDesktop()) {
+			limitMargin.x *= 8;
+			limitMargin.y *= 8;
+		}
+
+		var limitWidth = mapPosTwips.x + mapSizeTwips.x < lastCellTwips.x;
+		var limitHeight = mapPosTwips.y + mapSizeTwips.y < lastCellTwips.y;
 
 		// limit to data area only (and map size for margin)
 		if (limitWidth)
-			newDocWidth = Math.min(lastCellTwips.x + mapSizeTwips.x, newDocWidth);
+			newDocWidth = Math.min(lastCellTwips.x + limitMargin.x, newDocWidth);
 
 		if (limitHeight)
-			newDocHeight = Math.min(lastCellTwips.y + mapSizeTwips.y, newDocHeight);
+			newDocHeight = Math.min(lastCellTwips.y + limitMargin.y, newDocHeight);
 
 		var extendedLimit = false;
 
@@ -381,6 +378,8 @@ L.CalcTileLayer = L.CanvasTileLayer.extend({
 		var command = app.socket.parseServerCmd(textMsg);
 		if (command.width && command.height && this._documentInfo !== textMsg) {
 			var firstSelectedPart = (typeof this._selectedPart !== 'number');
+			if (command.readonly === 1)
+				this._map.setPermission('readonly');
 			this._docWidthTwips = command.width;
 			this._docHeightTwips = command.height;
 			this._lastColumn = command.lastcolumn;
@@ -390,7 +389,11 @@ L.CalcTileLayer = L.CanvasTileLayer.extend({
 			app.view.size.pixels = app.file.size.pixels.slice();
 			this._docType = command.type;
 			this._parts = command.parts;
-			this._selectedPart = command.selectedPart;
+			if (app.socket._reconnecting) {
+				app.socket.sendMessage('setclientpart part=' + this._selectedPart);
+			} else {
+				this._selectedPart = command.selectedPart;
+			}
 			this._selectedMode = (command.mode !== undefined) ? command.mode : 0;
 			if (this.sheetGeometry && this._selectedPart != this.sheetGeometry.getPart()) {
 				// Core initiated sheet switch, need to get full sheetGeometry data for the selected sheet.
@@ -689,7 +692,7 @@ L.CalcTileLayer = L.CanvasTileLayer.extend({
 		}
 	},
 
-	_handleSheetGeometryDataMsg: function (jsonMsgObj) {
+	_handleSheetGeometryDataMsg: function (jsonMsgObj, differentSheet) {
 		if (!this.sheetGeometry) {
 			this._sheetGeomFirstWait = false;
 			this.sheetGeometry = new L.SheetGeometry(jsonMsgObj,
@@ -704,7 +707,7 @@ L.CalcTileLayer = L.CanvasTileLayer.extend({
 			this.sheetGeometry.update(jsonMsgObj, /* checkCompleteness */ false, this._selectedPart);
 		}
 
-		this._replayPrintTwipsMsgs();
+		this._replayPrintTwipsMsgs(differentSheet);
 
 		this.sheetGeometry.setViewArea(this._pixelsToTwips(this._map._getTopLeftPoint()),
 			this._pixelsToTwips(this._map.getSize()));
@@ -890,13 +893,14 @@ L.CalcTileLayer = L.CanvasTileLayer.extend({
 			this._updateHeadersGridLines(values);
 
 		} else if (values.commandName === '.uno:SheetGeometryData') {
+			var differentSheet = this.sheetGeometry === undefined || this._selectedPart !== this.sheetGeometry.getPart();
 			// duplicate sheet-geometry for same sheet triggers replay of other messages that
 			// disrupt the view restore during sheet switch.
-			if (this._oldSheetGeomMsg === textMsg && this._selectedPart === this.sheetGeometry.getPart())
+			if (this._oldSheetGeomMsg === textMsg && !differentSheet)
 				return;
 
 			this._oldSheetGeomMsg = textMsg;
-			this._handleSheetGeometryDataMsg(values);
+			this._handleSheetGeometryDataMsg(values, differentSheet);
 
 		} else if (values.comments) {
 			app.sectionContainer.getSectionWithName(L.CSections.CommentList.name).clearList();
@@ -926,7 +930,7 @@ L.CalcTileLayer = L.CanvasTileLayer.extend({
 						}
 					}
 					if (commentObject)
-						commentObject.sectionProperties.data.cellPos = section.stringToRectangles(comment.cellPos)[0];
+						commentObject.sectionProperties.data.cellPos = this._cellRangeToTwipRect(comment.cellRange).toRectangle();
 				}
 			}
 
@@ -969,7 +973,7 @@ L.CalcTileLayer = L.CanvasTileLayer.extend({
 	_onCellCursorMsg: function (textMsg) {
 		L.CanvasTileLayer.prototype._onCellCursorMsg.call(this, textMsg);
 		this._refreshRowColumnHeaders();
-		if (!this._gotFirstCellCursor && !textMsg.match('EMPTY')) {
+		if (!this._gotFirstCellCursor) {
 			// Drawing is disabled from CalcTileLayer construction, enable it now.
 			this._gotFirstCellCursor = true;
 			this._update();
@@ -1121,4 +1125,3 @@ L.CalcTileLayer = L.CanvasTileLayer.extend({
 		return this._selectedPart;
 	},
 });
-

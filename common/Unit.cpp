@@ -31,6 +31,7 @@
 #include <common/SigUtil.hpp>
 #include <common/StringVector.hpp>
 #include <common/Message.hpp>
+#include <unistd.h>
 
 UnitKit *GlobalKit = nullptr;
 UnitWSD *GlobalWSD = nullptr;
@@ -59,7 +60,7 @@ UnitBase** UnitBase::linkAndCreateUnit(UnitType type, const std::string& unitLib
     DlHandle = dlopen(unitLibPath.c_str(), RTLD_GLOBAL|RTLD_NOW);
     if (!DlHandle)
     {
-        LOG_ERR("Failed to load " << unitLibPath << ": " << dlerror());
+        LOG_ERR("Failed to load unit-test lib " << dlerror());
         return nullptr;
     }
 
@@ -224,48 +225,51 @@ bool UnitBase::init(UnitType type, const std::string &unitLibPath)
     if (!unitLibPath.empty())
     {
         GlobalArray = linkAndCreateUnit(type, unitLibPath);
-        if (GlobalArray)
+        if (GlobalArray == nullptr)
         {
-            initTestSuiteOptions();
+            // Error is logged already.
+            return false;
+        }
 
-            // Filter tests.
-            GlobalIndex = 0;
-            filter();
+        initTestSuiteOptions();
 
-            UnitBase* instance = GlobalArray[GlobalIndex];
-            if (instance)
+        // Filter tests.
+        GlobalIndex = 0;
+        filter();
+
+        UnitBase* instance = GlobalArray[GlobalIndex];
+        if (instance)
+        {
+            rememberInstance(type, instance);
+            TST_LOG_NAME("UnitBase",
+                         "Starting test #1: " << GlobalArray[GlobalIndex]->getTestname());
+            instance->initialize();
+
+            if (instance && type == UnitType::Kit)
             {
-                rememberInstance(type, instance);
-                TST_LOG_NAME("UnitBase",
-                             "Starting test #1: " << GlobalArray[GlobalIndex]->getTestname());
-                instance->initialize();
+                std::unique_lock<std::mutex> lock(TimeoutThreadMutex);
+                TimeoutThread = std::thread(
+                    [instance]
+                    {
+                        Util::setThreadName("unit timeout");
 
-                if (instance && type == UnitType::Kit)
-                {
-                    std::unique_lock<std::mutex> lock(TimeoutThreadMutex);
-                    TimeoutThread = std::thread(
-                        [instance]
+                        std::unique_lock<std::mutex> lock2(TimeoutThreadMutex);
+                        if (TimeoutConditionVariable.wait_for(lock2,
+                                                              instance->_timeoutMilliSeconds) ==
+                            std::cv_status::no_timeout)
                         {
-                            Util::setThreadName("unit timeout");
-
-                            std::unique_lock<std::mutex> lock2(TimeoutThreadMutex);
-                            if (TimeoutConditionVariable.wait_for(lock2,
-                                                                  instance->_timeoutMilliSeconds) ==
-                                std::cv_status::no_timeout)
-                            {
-                                LOG_DBG(instance->getTestname() << ": Unit test finished in time");
-                            }
-                            else
-                            {
-                                LOG_ERR(instance->getTestname() << ": Unit test timeout after "
-                                                                << instance->_timeoutMilliSeconds);
-                                instance->timeout();
-                            }
-                        });
-                }
-
-                return get(type) != nullptr;
+                            LOG_DBG(instance->getTestname() << ": Unit test finished in time");
+                        }
+                        else
+                        {
+                            LOG_ERR(instance->getTestname() << ": Unit test timeout after "
+                                                            << instance->_timeoutMilliSeconds);
+                            instance->timeout();
+                        }
+                    });
             }
+
+            return get(type) != nullptr;
         }
     }
 
@@ -508,6 +512,9 @@ void UnitBase::exitTest(TestResult result, const std::string& reason)
 
         if (GlobalResult == TestResult::Ok)
             GlobalResult = result;
+
+        LOG_TST("Dumping state");
+        ::kill(getpid(), SIGUSR1);
     }
 
     _result = result;
@@ -608,7 +615,8 @@ void UnitWSD::DocBrokerDestroy(const std::string& key)
             GlobalWSD = nullptr;
             GlobalTool = nullptr;
 
-            if (GlobalArray[GlobalIndex] != nullptr)
+            if (GlobalArray[GlobalIndex] != nullptr && !SigUtil::getShutdownRequestFlag() &&
+                (_result == TestResult::Ok || GlobalTestOptions.getKeepgoing()))
             {
                 rememberInstance(_type, GlobalArray[GlobalIndex]);
 
@@ -617,10 +625,10 @@ void UnitWSD::DocBrokerDestroy(const std::string& key)
                 if (GlobalWSD)
                     GlobalWSD->configure(Poco::Util::Application::instance().config());
                 GlobalArray[GlobalIndex]->initialize();
-
-                // Wake-up so the previous test stops.
-                SocketPoll::wakeupWorld();
             }
+
+            // Wake-up so the previous test stops.
+            SocketPoll::wakeupWorld();
         }
     }
 }
@@ -640,7 +648,7 @@ void UnitWSD::onExitTest(TestResult result, const std::string&)
             LOG_TST("Failing fast per options, even though there are more tests");
 #if !MOBILEAPP
             LOG_TST("Setting TerminationFlag as the Test Suite failed");
-            SigUtil::setTerminationFlag(); // And wakupWorld.
+            SigUtil::setTerminationFlag(); // and wake-up world.
 #else
             SocketPoll::wakeupWorld();
 #endif
@@ -658,7 +666,7 @@ void UnitWSD::onExitTest(TestResult result, const std::string&)
 
 #if !MOBILEAPP
     LOG_TST("Setting TerminationFlag as there are no more tests");
-    SigUtil::setTerminationFlag(); // And wakupWorld.
+    SigUtil::setTerminationFlag(); // and wake-up world.
 #else
     SocketPoll::wakeupWorld();
 #endif
@@ -694,7 +702,7 @@ void UnitKit::onExitTest(TestResult, const std::string&)
 
 #if !MOBILEAPP
     // LOG_TST("Setting TerminationFlag as there are no more tests");
-    SigUtil::setTerminationFlag(); // And wakupWorld.
+    SigUtil::setTerminationFlag(); // and wake-up world.
 #else
     SocketPoll::wakeupWorld();
 #endif

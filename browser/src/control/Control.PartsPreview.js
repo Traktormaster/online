@@ -151,14 +151,6 @@ L.Control.PartsPreview = L.Control.extend({
 
 			// re-create scrollbar with new direction
 			this._direction = !window.mode.isDesktop() && !window.mode.isTablet() && L.DomUtil.isPortrait() ? 'x' : 'y';
-
-			// Hide portrait view's previews when layout view is used.
-			if (this._direction === 'x' && window.mode.isMobile()) {
-				document.getElementById('mobile-slide-sorter').style.display = 'block';
-			}
-			else if (this._direction === 'y' && window.mode.isMobile()) {
-				document.getElementById('mobile-slide-sorter').style.display = 'none';
-			}
 		}
 	},
 
@@ -228,6 +220,13 @@ L.Control.PartsPreview = L.Control.extend({
 		var pcw = document.getElementById('presentation-controls-wrapper');
 
 		L.DomEvent.on(pcw, 'contextmenu', function(e) {
+			var isMasterView = this._map['stateChangeHandler'].getItemValue('.uno:SlideMasterPage');
+			var $trigger = $(pcw);
+			if (isMasterView === 'true') {
+				$trigger.contextMenu(false);
+				return;
+			}
+			$trigger.contextMenu(true);
 			that._setPart(e);
 			$.contextMenu({
 				selector: '#presentation-controls-wrapper',
@@ -255,6 +254,13 @@ L.Control.PartsPreview = L.Control.extend({
 		}, this);
 
 		L.DomEvent.on(img, 'contextmenu', function(e) {
+			var isMasterView = this._map['stateChangeHandler'].getItemValue('.uno:SlideMasterPage');
+			var $trigger = $('#' + img.id);
+			if (isMasterView === 'true') {
+				$trigger.contextMenu(false);
+				return;
+			}
+			$trigger.contextMenu(true);
 			that._setPart(e);
 			$.contextMenu({
 				selector: '#' + img.id,
@@ -381,7 +387,6 @@ L.Control.PartsPreview = L.Control.extend({
 		if (i === 0 || (previewFrameTop >= topBound && previewFrameTop <= bottomBound)
 			|| (previewFrameBottom >= topBound && previewFrameBottom <= bottomBound)) {
 			imgSize = this._map.getPreview(i, i, this.options.maxWidth, this.options.maxHeight, {autoUpdate: this.options.autoUpdate, fetchThumbnail: this.options.fetchThumbnail});
-			img.fetched = true;
 
 			if (this._direction === 'x') {
 				L.DomUtil.setStyle(img, 'width', '');
@@ -610,8 +615,10 @@ L.Control.PartsPreview = L.Control.extend({
 			this._map._processPreviewQueue();
 			if (!this._previewInitialized)
 				return;
-			if (this._previewTiles[e.id])
+			if (this._previewTiles[e.id]) {
 				this._previewTiles[e.id].src = e.tile.src;
+				this._previewTiles[e.id].fetched = true;
+			}
 		}
 	},
 
@@ -661,12 +668,10 @@ L.Control.PartsPreview = L.Control.extend({
 					if (this._direction === 'x') {
 						if ((previewFrameBB.left >= topBound && previewFrameBB.left <= bottomBound)
 						|| (previewFrameBB.right >= topBound && previewFrameBB.right <= bottomBound)) {
-							img.fetched = true;
 							this._map.getPreview(i, i, this.options.maxWidth, this.options.maxHeight, {autoUpdate: this.options.autoUpdate});
 						}
 					} else if ((previewFrameBB.top >= topBound && previewFrameBB.top <= bottomBound)
 						|| (previewFrameBB.bottom >= topBound && previewFrameBB.bottom <= bottomBound)) {
-						img.fetched = true;
 						this._map.getPreview(i, i, this.options.maxWidth, this.options.maxHeight, {autoUpdate: this.options.autoUpdate});
 					}
 				}

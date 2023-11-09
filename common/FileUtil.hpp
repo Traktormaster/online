@@ -150,15 +150,18 @@ namespace FileUtil
     /// have equal size and every byte of their contents match.
     bool compareFileContents(const std::string& rhsPath, const std::string& lhsPath);
 
+    /// Reads the whole file to memory. Only for small files.
+    std::unique_ptr<std::vector<char>> readFile(const std::string& path, int maxSize = 256 * 1024);
+
     /// File/Directory stat helper.
     class Stat
     {
-        int clearStat() { memset (&_sb, 0, sizeof(_sb)); return 0; }
     public:
         /// Stat the given path. Symbolic links are stat'ed when @link is true.
         Stat(const std::string& file, bool link = false)
             : _path(file)
-            , _res(clearStat() | (link ? lstat(file.c_str(), &_sb) : stat(file.c_str(), &_sb)))
+            , _sb{}
+            , _res(link ? lstat(file.c_str(), &_sb) : stat(file.c_str(), &_sb))
             , _errno(errno)
         {
         }

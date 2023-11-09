@@ -1,5 +1,11 @@
 /* -*- js-indent-level: 8 -*- */
 /*
+ * Copyright the Collabora Online contributors.
+ *
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
+/*
  * JSDialog.MobileTabControl - widgets handling tabs on mobile
  *
  * Example JSON:
@@ -8,10 +14,6 @@
  *     type: 'tabcontrol',
  *     children: [...]
  * }
- *
- * Copyright the Collabora Online contributors.
- *
- * SPDX-License-Identifier: MPL-2.0
  */
 
 /* global JSDialog $ */
@@ -92,7 +94,7 @@ function _tabsToPanelConverter(parentContainer, data, builder, tabTooltip) {
 	var tabs = 0;
 	var tabObjects = [];
 	for (var tabIdx = 0; data.children && tabIdx < data.children.length; tabIdx++) {
-		if (data.children[tabIdx].type === 'tabpage') {
+		if (data.children[tabIdx].type === 'tabpage' || data.vertical) {
 			tabs++;
 			tabObjects.push(data.children[tabIdx]);
 		}
@@ -113,7 +115,7 @@ function _tabsToPanelConverter(parentContainer, data, builder, tabTooltip) {
 		for (tabIdx = 0; tabIdx < data.children.length; tabIdx++) {
 			var tab = data.children[tabIdx];
 
-			if (tab.type !== 'tabpage')
+			if (tab.type !== 'tabpage' && !data.vertical)
 				continue;
 
 			tabObjects[tabId].text = data.tabs[tabId].text;
@@ -123,7 +125,7 @@ function _tabsToPanelConverter(parentContainer, data, builder, tabTooltip) {
 		for (tabIdx = 0; tabIdx < data.children.length; tabIdx++) {
 			tab = data.children[tabIdx];
 
-			if (tab.type !== 'tabpage')
+			if (tab.type !== 'tabpage' && !data.vertical)
 				continue;
 
 			tabObjects[singleTabId].text = data.tabs[singleTabId].text;

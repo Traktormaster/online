@@ -32,6 +32,7 @@
 #include <common/ConfigUtil.hpp>
 #include <common/Util.hpp>
 #include <net/WebSocketSession.hpp>
+#include <wsd/TileDesc.hpp>
 
 #include <iterator>
 #include <fstream>
@@ -151,10 +152,10 @@ inline std::unique_ptr<Poco::Net::HTTPClientSession> createSession(const Poco::U
 {
 #if ENABLE_SSL
     if (uri.getScheme() == "https" || uri.getScheme() == "wss")
-        return Util::make_unique<Poco::Net::HTTPSClientSession>(uri.getHost(), uri.getPort());
+        return std::make_unique<Poco::Net::HTTPSClientSession>(uri.getHost(), uri.getPort());
 #endif
 
-    return Util::make_unique<Poco::Net::HTTPClientSession>(uri.getHost(), uri.getPort());
+    return std::make_unique<Poco::Net::HTTPClientSession>(uri.getHost(), uri.getPort());
 }
 
 /// Uses Poco to make an HTTP GET from the given URI.
@@ -398,12 +399,36 @@ inline std::vector<char> getResponseMessage(const std::shared_ptr<http::WebSocke
     return ws->waitForMessage(prefix, timeoutMs, testname);
 }
 
+inline std::shared_ptr<TileDesc> getResponseDesc(const std::shared_ptr<http::WebSocketSession>& ws,
+                                                 const std::string& prefix, const std::string& testname,
+                                                 const std::chrono::milliseconds timeoutMs
+                                                 = std::chrono::seconds(10))
+{
+    std::vector<char> tile = getResponseMessage(ws, prefix, testname, timeoutMs);
+
+    if (tile.empty())
+        return std::shared_ptr<TileDesc>();
+
+    return std::make_shared<TileDesc>(
+        TileDesc::parse(StringVector::tokenize(tile.data(), tile.size())));
+}
+
 inline std::string getResponseString(const std::shared_ptr<http::WebSocketSession>& ws,
                                      const std::string& prefix, const std::string& testname,
                                      const std::chrono::milliseconds timeoutMs
                                      = std::chrono::seconds(10))
 {
     const std::vector<char> response = ws->waitForMessage(prefix, timeoutMs, testname);
+
+    return std::string(response.data(), response.size());
+}
+
+inline std::string
+getResponseStringAny(const std::shared_ptr<http::WebSocketSession>& ws,
+                     const std::vector<std::string>& prefixes, const std::string& testname,
+                     const std::chrono::milliseconds timeoutMs = std::chrono::seconds(10))
+{
+    const std::vector<char> response = ws->waitForMessageAny(prefixes, timeoutMs, testname);
 
     return std::string(response.data(), response.size());
 }
@@ -484,7 +509,7 @@ connectLOKit(const std::shared_ptr<SocketPoll>& socketPoll, const Poco::URI& uri
             http::Request req(url);
             ws->asyncRequest(req, socketPoll);
 
-            const char* expected_response = "statusindicator: ready";
+            const char* expected_response = "statusindicator: find";
 
             TST_LOG("Connected to " << uri.toString() << ", waiting for response ["
                                     << expected_response << "]");

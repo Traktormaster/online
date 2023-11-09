@@ -175,6 +175,11 @@ bool tryRemoveJail(const std::string& root)
     //FIXME: technically, the loTemplate directory may have any name.
     unmount(Poco::Path(root, "lo").toString());
 
+    // Unmount the test-mount directory too.
+    const std::string testMountPath = Poco::Path(root, "cool_test_mount").toString();
+    if (FileUtil::Stat(testMountPath).exists())
+        unmount(testMountPath);
+
     // Unmount/delete the jail (sysTemplate).
     safeRemoveDir(root);
 
@@ -269,7 +274,8 @@ void createJailPath(const std::string& path)
 {
     LOG_INF("Creating jail path (if missing): " << path);
     Poco::File(path).createDirectories();
-    chmod(path.c_str(), S_IXUSR | S_IWUSR | S_IRUSR);
+    if (chmod(path.c_str(), S_IXUSR | S_IWUSR | S_IRUSR) != 0)
+        LOG_WRN("chmod(\"" << path << "\") failed: " << strerror(errno));
 }
 
 void setupChildRoot(bool bindMount, const std::string& childRoot, const std::string& sysTemplate)

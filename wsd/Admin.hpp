@@ -45,6 +45,7 @@ private:
     Admin* _admin;
     int _sessionId;
     bool _isAuthenticated;
+    std::string _clientIPAdress;
 };
 
 class MonitorSocketHandler : public AdminSocketHandler
@@ -86,9 +87,9 @@ public:
 
     void startMonitors();
 
-    void updateMonitors(std::vector<std::string>& oldMonitors);
+    void updateMonitors(std::vector<std::pair<std::string, int>>& oldMonitors);
 
-    std::vector<std::string> getMonitorList();
+    std::vector<std::pair<std::string, int>> getMonitorList();
 
     /// Custom poll thread function
     void pollingThread() override;
@@ -109,7 +110,7 @@ public:
     /// Calls with same pid will increment view count, if pid already exists
     void addDoc(const std::string& docKey, pid_t pid, const std::string& filename,
                 const std::string& sessionId, const std::string& userName, const std::string& userId,
-                const int smapsFD, const Poco::URI& wopiSrc);
+                const int smapsFD, const std::string& wopiSrc, bool readOnly);
 
     /// Decrement view count till becomes zero after which doc is removed
     void rmDoc(const std::string& docKey, const std::string& sessionId);
@@ -170,6 +171,11 @@ public:
 
     // delete entry from _monitorSocket map
     void deleteMonitorSocket(const std::string &uriWithoutParam);
+
+    bool logAdminAction()
+    {
+        return COOLWSD::getConfigValue<bool>("admin_console.logging.admin_action", true);
+    }
 
 private:
     /// Notify Forkit of changed settings.

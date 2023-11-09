@@ -1,3 +1,51 @@
+coolwsd (23.05.5.3-1) unstable; urgency=medium
+
+  * https://github.com/CollaboraOnline/online/releases/tag/cp-23.05.5-3
+
+ -- Andras Timar <andras.timar@collabora.com>  Thu, 25 Oct 2023 22:20:00 +0200
+
+coolwsd (23.05.5.2-1) unstable; urgency=medium
+
+  * https://github.com/CollaboraOnline/online/releases/tag/cp-23.05.5-2
+
+ -- Andras Timar <andras.timar@collabora.com>  Thu, 19 Oct 2023 11:15:00 +0200
+
+coolwsd (23.05.5.1-1) unstable; urgency=medium
+
+  * https://github.com/CollaboraOnline/online/releases/tag/cp-23.05.5-1
+
+ -- Andras Timar <andras.timar@collabora.com>  Wed, 11 Oct 2023 20:28:00 +0200
+
+coolwsd (23.05.4.2-1) unstable; urgency=medium
+
+  * https://github.com/CollaboraOnline/online/releases/tag/cp-23.05.4-2
+
+ -- Andras Timar <andras.timar@collabora.com>  Tue, 19 Sep 2023 22:00:00 +0200
+
+coolwsd (23.05.4.1-1) unstable; urgency=medium
+
+  * https://github.com/CollaboraOnline/online/releases/tag/cp-23.05.4-1
+
+ -- Andras Timar <andras.timar@collabora.com>  Mon, 11 Sep 2023 22:30:00 +0200
+
+coolwsd (23.05.3.1-1) unstable; urgency=medium
+
+  * https://github.com/CollaboraOnline/online/releases/tag/cp-23.05.3-1
+
+ -- Andras Timar <andras.timar@collabora.com>  Mon, 28 Aug 2023 22:00:00 +0200
+
+coolwsd (23.05.2.2-1) unstable; urgency=medium
+
+  * https://github.com/CollaboraOnline/online/releases/tag/cp-23.05.2-2
+
+ -- Aron Budea <aron.budea@collabora.com>  Mon, 24 Jul 2023 16:30:00 +0200
+
+coolwsd (23.05.2.1-1) unstable; urgency=medium
+
+  * https://github.com/CollaboraOnline/online/releases/tag/cp-23.05.2-1
+
+ -- Aron Budea <aron.budea@collabora.com>  Thu, 20 Jul 2023 12:45:00 +0200
+
 coolwsd (23.05.1.2-1) unstable; urgency=medium
 
   * https://github.com/CollaboraOnline/online/releases/tag/cp-23.05.1-2

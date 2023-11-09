@@ -7,8 +7,10 @@
 
 #include <config.h>
 
+#include "Kit.hpp"
 #include "ChildSession.hpp"
 #include "MobileApp.hpp"
+#include "COOLWSD.hpp"
 
 #include <climits>
 #include <fstream>
@@ -76,11 +78,12 @@ namespace {
 /// Formats the uno command information for logging
 std::string formatUnoCommandInfo(const std::string& sessionId, const std::string& unoCommand)
 {
-    std::string recorded_time = Util::getHttpTimeNow();
+    // E.g. '2023-09-06 12:19:32', matching systemd format.
+    std::string recorded_time = Util::getTimeNow("%Y-%m-%d %T");
 
     std::string unoCommandInfo;
 
-    // unoCommand(sessionId) : command - HttpTime
+    // unoCommand(sessionId) : command - time
     unoCommandInfo.append("unoCommand");
     unoCommandInfo.push_back('(');
     unoCommandInfo.append(sessionId);
@@ -95,22 +98,34 @@ std::string formatUnoCommandInfo(const std::string& sessionId, const std::string
 
 }
 
-ChildSession::ChildSession(
-    const std::shared_ptr<ProtocolHandlerInterface> &protocol,
-    const std::string& id,
-    const std::string& jailId,
-    const std::string& jailRoot,
-    DocumentManagerInterface& docManager) :
-    Session(protocol, "ToMaster-" + id, id, false),
-    _jailId(jailId),
-    _jailRoot(jailRoot),
-    _docManager(&docManager),
-    _viewId(-1),
-    _isDocLoaded(false),
-    _copyToClipboard(false),
-    _canonicalViewId(-1),
-    _isDumpingTiles(false)
+ChildSession::ChildSession(const std::shared_ptr<ProtocolHandlerInterface>& protocol,
+                           const std::string& id, const std::string& jailId,
+                           const std::string& jailRoot, DocumentManagerInterface& docManager)
+    : Session(protocol, "ToMaster-" + id, id, false)
+    , _jailId(jailId)
+    , _jailRoot(jailRoot)
+    , _docManager(&docManager)
+    , _viewId(-1)
+    , _isDocLoaded(false)
+    , _copyToClipboard(false)
+    , _canonicalViewId(-1)
+    , _isDumpingTiles(false)
+    , _clientVisibleArea(0, 0, 0, 0)
+    , _URPContext(nullptr)
+    , _hasURP(false)
 {
+    if (isURPEnabled())
+    {
+        LOG_WRN("URP is enabled in the config: Starting a URP tunnel for this session ["
+                << getName() << "]");
+
+        _hasURP = startURP(docManager.getLOKit(), &_URPContext);
+
+        if (!_hasURP)
+            LOG_INF("Failed to start a URP bridge for this session [" << getName()
+                                                                      << "], disabling URP");
+    }
+
     LOG_INF("ChildSession ctor [" << getName() << "]. JailRoot: [" << _jailRoot << ']');
 }
 
@@ -118,6 +133,11 @@ ChildSession::~ChildSession()
 {
     LOG_INF("~ChildSession dtor [" << getName() << ']');
     disconnect();
+
+    if (_hasURP)
+    {
+        _docManager->getLOKit()->stopURP(_URPContext);
+    }
 }
 
 void ChildSession::disconnect()
@@ -385,10 +405,6 @@ bool ChildSession::_handleInput(const char *buffer, int length)
     {
         assert(false && "Tile traffic should go through the DocumentBroker-LoKit WS.");
     }
-    else if (tokens.equals(0, "requestloksession"))
-    {
-        // Just ignore these.
-    }
     else if (tokens.equals(0, "blockingcommandstatus"))
     {
 #if ENABLE_FEATURE_LOCK || ENABLE_FEATURE_RESTRICTION
@@ -436,6 +452,7 @@ bool ChildSession::_handleInput(const char *buffer, int length)
                tokens.equals(0, "sallogoverride") ||
                tokens.equals(0, "rendersearchresult") ||
                tokens.equals(0, "contentcontrolevent") ||
+               tokens.equals(0, "a11ystate") ||
                tokens.equals(0, "geta11yfocusedparagraph") ||
                tokens.equals(0, "geta11ycaretposition") ||
                tokens.equals(0, "toggletiledumping"));
@@ -627,6 +644,10 @@ bool ChildSession::_handleInput(const char *buffer, int length)
         else if (tokens.equals(0, "rendersearchresult"))
         {
             return renderSearchResult(buffer, length, tokens);
+        }
+        else if (tokens.equals(0, "a11ystate"))
+        {
+            return setAccessibilityState(tokens[1] == "true");
         }
         else if (tokens.equals(0, "geta11yfocusedparagraph"))
         {
@@ -973,8 +994,15 @@ bool ChildSession::clientVisibleArea(const StringVector& tokens)
 
     getLOKitDocument()->setView(_viewId);
 
+    _clientVisibleArea = Util::Rectangle(x, y, width, height);
     getLOKitDocument()->setClientVisibleArea(x, y, width, height);
     return true;
+}
+
+bool ChildSession::isTileInsideVisibleArea(const TileDesc& tile) const
+{
+    return (tile.getTilePosX() >= _clientVisibleArea.getLeft() && tile.getTilePosX() <= _clientVisibleArea.getRight() &&
+        tile.getTilePosY() >= _clientVisibleArea.getTop() && tile.getTilePosY() <= _clientVisibleArea.getBottom());
 }
 
 bool ChildSession::outlineState(const StringVector& tokens)
@@ -1158,6 +1186,7 @@ bool ChildSession::getTextSelection(const StringVector& tokens)
 
 bool ChildSession::getClipboard(const StringVector& tokens)
 {
+    std::string token;
     const char **pMimeTypes = nullptr; // fetch all for now.
     const char  *pOneType[2];
     size_t       nOutCount = 0;
@@ -1166,7 +1195,6 @@ bool ChildSession::getClipboard(const StringVector& tokens)
     char       **pOutStreams = nullptr;
 
     bool hasMimeRequest = tokens.size() > 1;
-    std::string token;
     if (hasMimeRequest)
     {
         pMimeTypes = pOneType;
@@ -1453,6 +1481,7 @@ bool ChildSession::keyEvent(const StringVector& tokens,
     // Don't close LO window!
     constexpr int KEY_CTRL = 0x2000;
     constexpr int KEY_W = 0x0216;
+    constexpr int KEY_INSERT = 0x0505;
     if (keycode == (KEY_CTRL | KEY_W))
     {
         return true;
@@ -1468,7 +1497,14 @@ bool ChildSession::keyEvent(const StringVector& tokens,
 
     getLOKitDocument()->setView(_viewId);
     if (target == LokEventTargetEnum::Document)
+    {
+        // Check if override mode is disabled.
+        if (type == LOK_KEYEVENT_KEYINPUT && charcode == 0 && keycode == KEY_INSERT &&
+            !config::getBool("overwrite_mode.enable", true))
+            return true;
+
         getLOKitDocument()->postKeyEvent(type, charcode, keycode);
+    }
     else if (winId != 0)
         getLOKitDocument()->postWindowKeyEvent(winId, type, charcode, keycode);
 
@@ -1594,7 +1630,7 @@ bool ChildSession::dialogEvent(const StringVector& tokens)
 
     try
     {
-        nLOKWindowId = std::stoull(tokens[1].c_str());
+        nLOKWindowId = std::stoull(tokens[1]);
     }
     catch (const std::exception&)
     {
@@ -2210,6 +2246,23 @@ bool ChildSession::saveAs(const StringVector& tokens)
         filterOptions = "EmbedImages";
     }
 
+    if (_docManager->isDocPasswordProtected() && _docManager->haveDocPassword())
+    {
+        if (_docManager->getDocPasswordType() == DocumentPasswordType::ToView)
+        {
+            filterOptions += std::string(",Password=") + _docManager->getDocPassword() +
+                             std::string("PASSWORDEND");
+        }
+        else
+        {
+            filterOptions += std::string(",PasswordToModify=") + _docManager->getDocPassword() +
+                             std::string("PASSWORDTOMODIFYEND");
+        }
+        // Password might have changed since load
+        setHaveDocPassword(true);
+        setDocPassword(_docManager->getDocPassword());
+    }
+
     // We don't have the FileId at this point, just a new filename to save-as.
     // So here the filename will be obfuscated with some hashing, which later will
     // get a proper FileId that we will use going forward.
@@ -2495,6 +2548,12 @@ bool ChildSession::removeTextContext(const StringVector& tokens)
     return true;
 }
 
+bool ChildSession::setAccessibilityState(bool enable)
+{
+    getLOKitDocument()->setAccessibilityState(_viewId, enable);
+    return true;
+}
+
 bool ChildSession::getA11yFocusedParagraph()
 {
     getLOKitDocument()->setView(_viewId);
@@ -2711,24 +2770,27 @@ void ChildSession::loKitCallback(const int type, const std::string& payload)
                               " x=" + std::to_string(x) +
                               " y=" + std::to_string(y) +
                               " width=" + std::to_string(width) +
-                              " height=" + std::to_string(height));
+                              " height=" + std::to_string(height) +
+                              " wid=" + std::to_string(getCurrentWireId()));
             }
             else if (tokens.size() == 2 && tokens.equals(0, "EMPTY"))
             {
-                // without mode: "EMPTY, <part>"
+                // without mode: "EMPTY, <part>, 0"
                 const std::string part = (_docType != "text" ? tokens[1].c_str() : "0"); // Writer renders everything as part 0.
-                sendTextFrame("invalidatetiles: EMPTY, " + part);
+                sendTextFrame("invalidatetiles: EMPTY, " + part + ", 0" + " wid=" + std::to_string(getCurrentWireId()));
             }
             else if (tokens.size() == 3 && tokens.equals(0, "EMPTY"))
             {
                 // with mode:    "EMPTY, <part>, <mode>"
                 const std::string part = (_docType != "text" ? tokens[1].c_str() : "0"); // Writer renders everything as part 0.
                 const std::string mode = (_docType != "text" ? tokens[2].c_str() : "0"); // Writer is not using mode.
-                sendTextFrame("invalidatetiles: EMPTY, " + part + ", " + mode);
+                sendTextFrame("invalidatetiles: EMPTY, " + part + ", " + mode +
+                              " wid=" + std::to_string(getCurrentWireId()));
             }
             else
             {
-                sendTextFrame("invalidatetiles: " + payload);
+                sendTextFrame("invalidatetiles: " + payload +
+                              " wid=" + std::to_string(getCurrentWireId()));
             }
         }
         break;
@@ -2965,6 +3027,9 @@ void ChildSession::loKitCallback(const int type, const std::string& payload)
     case LOK_CALLBACK_INVALIDATE_SHEET_GEOMETRY:
         sendTextFrame("invalidatesheetgeometry: " + payload);
         break;
+    case LOK_CALLBACK_DOCUMENT_BACKGROUND_COLOR:
+        sendTextFrame("documentbackgroundcolor: " + payload);
+        break;
     case LOK_CALLBACK_APPLICATION_BACKGROUND_COLOR:
         sendTextFrame("applicationbackgroundcolor: " + payload);
         break;
@@ -3059,7 +3124,7 @@ void ChildSession::loKitCallback(const int type, const std::string& payload)
         // it was download request
 
         // Register download id -> URL mapping in the DocumentBroker
-        auto url = std::string("../../") + payload.substr(strlen("file:///tmp/"));
+        auto url = std::string("../../") + payload.substr(payload.find_last_of("/"));
         auto downloadId = Util::rng::getFilename(64);
         std::string docBrokerMessage = "registerdownload: downloadid=" + downloadId + " url=" + url + " clientid=" + getId();
         _docManager->sendFrame(docBrokerMessage.c_str(), docBrokerMessage.length());
@@ -3082,9 +3147,24 @@ void ChildSession::loKitCallback(const int type, const std::string& payload)
         sendTextFrame("a11ytextselectionchanged: " + payload);
         break;
     }
+    case LOK_CALLBACK_A11Y_FOCUSED_CELL_CHANGED:
+    {
+        sendTextFrame("a11yfocusedcellchanged: " + payload);
+        break;
+    }
     case LOK_CALLBACK_COLOR_PALETTES:
         sendTextFrame("colorpalettes: " + payload);
         break;
+    case LOK_CALLBACK_A11Y_EDITING_IN_SELECTION_STATE:
+    {
+        sendTextFrame("a11yeditinginselectionstate: " + payload);
+        break;
+    }
+    case LOK_CALLBACK_A11Y_SELECTION_CHANGED:
+    {
+        sendTextFrame("a11yselectionchanged: " + payload);
+        break;
+    }
     default:
         LOG_ERR("Unknown callback event (" << lokCallbackTypeToString(type) << "): " << payload);
     }

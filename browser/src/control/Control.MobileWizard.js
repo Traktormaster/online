@@ -1,5 +1,11 @@
 /* -*- js-indent-level: 8 -*- */
 /*
+ * Copyright the Collabora Online contributors.
+ *
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
+/*
  * L.Control.MobileWizard - main container can contain few MobileWizardWindows
  */
 
@@ -103,9 +109,6 @@ L.Control.MobileWizard = L.Control.extend({
 
 		if (window.pageMobileWizard === true)
 			window.pageMobilewizard = false;
-
-		if (this.map.getDocType() === 'presentation' || this.map.getDocType() === 'drawing')
-			this._hideSlideSorter();
 
 		if (window.commentWizard === true)
 			window.commentWizard = false;
@@ -215,10 +218,6 @@ L.Control.MobileWizard = L.Control.extend({
 			}
 			this._hideWizard();
 		}
-	},
-
-	_hideSlideSorter: function() {
-		document.getElementById('mobile-wizard-header').style.display = 'none';
 	},
 
 	onJSUpdate: function (e) {

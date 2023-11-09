@@ -59,7 +59,7 @@ public:
         if (_scenario == Scenario::VerifyOverwrite)
         {
             // By default, we don't upload when verifying (unless always_save_on_exit is set).
-            setExpectedPutFile(SaveOnExit);
+            setExpectedPutFile(SaveOnExit ? 2 : 0);
         }
         else
         {
@@ -100,7 +100,7 @@ public:
         LOK_ASSERT_EQUAL_MESSAGE("Unexpected overwritting the document in storage", false, force);
 
         // Internal Server Error.
-        return Util::make_unique<http::Response>(http::StatusCode::InternalServerError);
+        return std::make_unique<http::Response>(http::StatusCode::InternalServerError);
     }
 
     bool onDocumentModified(const std::string& message) override
@@ -209,7 +209,7 @@ public:
             LOK_ASSERT_EQUAL(std::string("true"), request.get("X-COOL-WOPI-IsModifiedByUser"));
 
             // File unknown/User unauthorized.
-            return Util::make_unique<http::Response>(http::StatusCode::NotFound);
+            return std::make_unique<http::Response>(http::StatusCode::NotFound);
         }
 
         // This during closing the document.
@@ -287,14 +287,16 @@ private:
     STATE_ENUM(Phase, Load, WaitLoadStatus, WaitModifiedStatus, WaitDocClose, Done) _phase;
 
     const Scenario _scenario;
+    const bool _disconnect;
 
     std::chrono::steady_clock::time_point _eventTime;
 
 public:
-    UnitWOPIReadOnly(Scenario scenario)
-        : WopiTestServer("UnitWOPIReadOnly_" + toStringShort(scenario))
+    UnitWOPIReadOnly(Scenario scenario, bool disconnect)
+        : WopiTestServer("UnitWOPIReadOnly_" + toStringShort(scenario) + (disconnect ? "_X" : ""))
         , _phase(Phase::Load)
         , _scenario(scenario)
+        , _disconnect(disconnect)
     {
     }
 
@@ -307,9 +309,9 @@ public:
     }
 
     void configCheckFileInfo(const Poco::Net::HTTPRequest& /*request*/,
-                             Poco::JSON::Object::Ptr fileInfo) override
+                             Poco::JSON::Object::Ptr& fileInfo) override
     {
-        LOG_TST("CheckFileInfo: making read-only");
+        LOG_TST("CheckFileInfo: making read-only for " << name(_scenario));
 
         fileInfo->set("UserCanWrite", "false");
         fileInfo->set("UserCanNotWriteRelative", "true");
@@ -408,10 +410,19 @@ public:
                 {
                     LOG_TST("No modified status on read-only document after waiting for "
                             << elapsed);
-                    TRANSITION_STATE(_phase, Phase::WaitDocClose);
                     _eventTime = std::chrono::steady_clock::now();
-                    LOG_TST("Saving the document");
-                    WSD_CMD("save dontTerminateEdit=0 dontSaveIfUnmodified=0");
+
+                    if (_disconnect)
+                    {
+                        TRANSITION_STATE(_phase, Phase::Done);
+                        deleteSocketAt(0);
+                    }
+                    else
+                    {
+                        TRANSITION_STATE(_phase, Phase::WaitDocClose);
+                        LOG_TST("Saving the document");
+                        WSD_CMD("save dontTerminateEdit=0 dontSaveIfUnmodified=0");
+                    }
                 }
             }
             break;
@@ -502,7 +513,7 @@ public:
 
             // Fail with error.
             LOG_TST("Simulate PutFile failure");
-            return Util::make_unique<http::Response>(http::StatusCode::InternalServerError);
+            return std::make_unique<http::Response>(http::StatusCode::InternalServerError);
         }
 
         if (getCountPutFile() == 2)
@@ -510,7 +521,7 @@ public:
             LOG_TST("Second PutFile, which will also fail");
 
             LOG_TST("Simulate PutFile failure (again)");
-            return Util::make_unique<http::Response>(http::StatusCode::InternalServerError);
+            return std::make_unique<http::Response>(http::StatusCode::InternalServerError);
         }
 
         if (getCountPutFile() == 3)
@@ -615,7 +626,7 @@ public:
 /// which fails. We close the document and verify
 /// that the document is uploaded upon closing.
 /// Modify, Save, Upload fails, close -> Upload.
-class UnitFailUplaodClose : public WopiTestServer
+class UnitFailUploadClose : public WopiTestServer
 {
     using Base = WopiTestServer;
 
@@ -624,8 +635,8 @@ class UnitFailUplaodClose : public WopiTestServer
     _phase;
 
 public:
-    UnitFailUplaodClose()
-        : WopiTestServer("UnitFailUplaodClose")
+    UnitFailUploadClose()
+        : WopiTestServer("UnitFailUploadClose")
         , _phase(Phase::Load)
     {
     }
@@ -650,7 +661,7 @@ public:
 
             // Fail with error.
             LOG_TST("Returning 500 to simulate PutFile failure");
-            return Util::make_unique<http::Response>(http::StatusCode::InternalServerError);
+            return std::make_unique<http::Response>(http::StatusCode::InternalServerError);
         }
 
         // This during closing the document.
@@ -745,12 +756,14 @@ public:
 
 UnitBase** unit_create_wsd_multi(void)
 {
-    return new UnitBase* [7]
+    return new UnitBase* [9]
     {
         new UnitWOPIExpiredToken(), new UnitWOPIFailUpload(),
-            new UnitWOPIReadOnly(UnitWOPIReadOnly::Scenario::ViewWithComment),
-            new UnitWOPIReadOnly(UnitWOPIReadOnly::Scenario::Edit), new UnitFailUploadModified(),
-            new UnitFailUplaodClose(), nullptr
+            new UnitWOPIReadOnly(UnitWOPIReadOnly::Scenario::ViewWithComment, /*disconnect=*/false),
+            new UnitWOPIReadOnly(UnitWOPIReadOnly::Scenario::Edit, /*disconnect=*/false),
+            new UnitWOPIReadOnly(UnitWOPIReadOnly::Scenario::ViewWithComment, /*disconnect=*/true),
+            new UnitWOPIReadOnly(UnitWOPIReadOnly::Scenario::Edit, /*disconnect=*/true),
+            new UnitFailUploadModified(), new UnitFailUploadClose(), nullptr
     };
 }
 

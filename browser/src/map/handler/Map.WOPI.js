@@ -3,7 +3,7 @@
  * L.WOPI contains WOPI related logic
  */
 
-/* global w2ui _ app */
+/* global w2ui _ app errorMessages */
 L.Map.WOPI = L.Handler.extend({
 	// If the CheckFileInfo call fails on server side, we won't have any PostMessageOrigin.
 	// So use '*' because we still needs to send 'close' message to the parent frame which
@@ -185,13 +185,14 @@ L.Map.WOPI = L.Handler.extend({
 	// Checking whether a message came from our iframe's parents is
 	// un-necessarily difficult.
 	_allowMessageOrigin: function(e) {
+		// e.origin === 'null' when sandboxed
+		if (e.origin === 'null')
+			return false;
+
 		// cache - to avoid regexps.
 		if (this._cachedGoodOrigin && this._cachedGoodOrigin === e.origin)
 			return true;
 
-		// e.origin === 'null' when sandboxed (i.e. when the parent is a file on local filesystem).
-		if (e.origin === 'null')
-			return true;
 		try {
 			if (e.origin === window.parent.origin)
 				return true;
@@ -233,8 +234,10 @@ L.Map.WOPI = L.Handler.extend({
 	},
 
 	_postMessageListener: function(e) {
-		if (!this._allowMessageOrigin(e))
+		if (!this._allowMessageOrigin(e)) {
+			window.app.console.error('PostMessage not allowed due to incorrect origin.');
 			return;
+		}
 
 		var msg;
 
@@ -269,6 +272,7 @@ L.Map.WOPI = L.Handler.extend({
 			}
 			var show = msg.MessageId === 'Show_Button';
 			this._map.uiManager.showButton(msg.Values.id, show);
+			return;
 		}
 		else if (msg.MessageId === 'Remove_Statusbar_Element') {
 			if (!msg.Values) {
@@ -284,18 +288,23 @@ L.Map.WOPI = L.Handler.extend({
 				return;
 			}
 			w2ui['actionbar'].remove(msg.Values.id);
+			return;
 		}
 		else if (msg.MessageId === 'Show_Menubar') {
 			this._map.uiManager.showMenubar();
+			return;
 		}
 		else if (msg.MessageId === 'Hide_Menubar') {
 			this._map.uiManager.hideMenubar();
+			return;
 		}
 		else if (msg.MessageId === 'Show_Ruler') {
 			this._map.uiManager.showRuler();
+			return;
 		}
 		else if (msg.MessageId === 'Hide_Ruler') {
 			this._map.uiManager.hideRuler();
+			return;
 		}
 		else if (msg.MessageId === 'Show_Menu_Item' || msg.MessageId === 'Hide_Menu_Item') {
 			if (!msg.Values) {
@@ -316,12 +325,15 @@ L.Map.WOPI = L.Handler.extend({
 			} else {
 				this._map.menubar.hideItem(msg.Values.id);
 			}
+			return;
 		}
 		else if (msg.MessageId === 'Insert_Button' &&
 			msg.Values && msg.Values.id && msg.Values.imgurl) {
 			this._map.uiManager.insertButton(msg.Values);
+			return;
 		} else if (msg.MessageId === 'Send_UNO_Command' && msg.Values && msg.Values.Command) {
 			this._map.sendUnoCommand(msg.Values.Command, msg.Values.Args || '');
+			return;
 		}
 		else if (msg.MessageId === 'Disable_Default_UIAction') {
 			// Disable the default handler and action for a UI command.
@@ -333,10 +345,25 @@ L.Map.WOPI = L.Handler.extend({
 			if (msg.Values && msg.Values.action && msg.Values.disable !== undefined) {
 				this._map._disableDefaultAction[msg.Values.action] = msg.Values.disable;
 			}
+			return;
+		}
+		else if (msg.MessageId === 'Error_Messages') {
+			if (msg.Values && msg.Values.list) {
+				msg.Values.list.forEach(function (item) {
+					if (Object.prototype.hasOwnProperty.call(errorMessages.storage, item.type)) {
+						errorMessages.storage[item.type] = item.msg;
+					} else if (Object.prototype.hasOwnProperty.call(errorMessages.uploadfile, item.type)) {
+						errorMessages.uploadfile[item.type] = item.msg;
+					} else if (Object.prototype.hasOwnProperty.call(errorMessages, item.type)) {
+						errorMessages[item.type] = item.msg;
+					}
+				});
+			}
 		}
 
 		// All following actions must be done after initialization is completed.
 		if (!window.WOPIPostmessageReady) {
+			window.app.console.error('PostMessage ignored: not ready.');
 			return;
 		}
 
@@ -354,6 +381,15 @@ L.Map.WOPI = L.Handler.extend({
 		if (msg.MessageId === 'Close_Session') {
 			app.socket.sendMessage('closedocument');
 			return;
+		}
+
+		// when user goes idle we have 'this._appLoaded == false'
+		if (msg.MessageId === 'Get_User_State') {
+			var isIdle = app.idleHandler.isDimActive();
+			this._postMessage({msgId: 'Get_User_State_Resp', args: {
+				State: (isIdle ? 'idle' : 'active'),
+				Elapsed: app.idleHandler.getElapsedFromActivity()
+			}});
 		}
 
 		// For all other messages, warn if trying to interact before we are completely loaded

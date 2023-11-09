@@ -16,6 +16,7 @@ L.Control.StatusBar = L.Control.extend({
 		map.on('commandstatechanged', this.onCommandStateChanged, this);
 		map.on('contextchange', this.onContextChange, this);
 		map.on('updatepermission', this.onPermissionChanged, this);
+		map.on('updatestatepagenumber', this.onPageChange, this);
 		this.create();
 
 		$(window).resize(function() {
@@ -93,24 +94,15 @@ L.Control.StatusBar = L.Control.extend({
 			item = toolbar.get(id);
 		}
 
-		// In the iOS app we don't want clicking on the toolbar to pop up the keyboard.
-		if (!window.ThisIsTheiOSApp && id !== 'zoomin' && id !== 'zoomout' && id !== 'mobile_wizard' && id !== 'insertion_mobile_wizard') {
-			this.map.focus(this.map.canAcceptKeyboardInput()); // Maintain same keyboard state.
-		}
+		this.map.preventKeyboardPopup(id);
 
-		if (item.disabled) {
+		if (item.disabled)
 			return;
-		}
 
 		var docLayer = this.map._docLayer;
 
 		if (item.uno) {
-			if (item.unosheet && this.map.getDocType() === 'spreadsheet') {
-				this.map.toggleCommandState(item.unosheet);
-			}
-			else {
-				this.map.toggleCommandState(window.getUNOCommand(item.uno));
-			}
+			this.map.executeUnoAction(item);
 		}
 		else if (id === 'zoomin' && this.map.getZoom() < this.map.getMaxZoom()) {
 			this.map.zoomIn(1, null, true /* animate? */);
@@ -139,7 +131,7 @@ L.Control.StatusBar = L.Control.extend({
 			this.map.search(L.DomUtil.get('search-input').value);
 		}
 		else if (id === 'cancelsearch') {
-			this._cancelSearch();
+			this.map.cancelSearch();
 		}
 		else if (id.startsWith('StateTableCellMenu') && subItem) {
 			e.done(function () {
@@ -175,8 +167,19 @@ L.Control.StatusBar = L.Control.extend({
 		else if (subItem && subItem.id === 'morelanguages') {
 			this.map.fire('morelanguages', { applyto: 'all' });
 		}
+		else if (subItem && subItem.id === 'langpara') {
+			this.map.fire('morelanguages', { applyto: 'paragraph' });
+		}
+		else if (subItem && subItem.id === 'langselection') {
+			this.map.fire('morelanguages', { applyto: 'selection' });
+		}
 	},
-
+	onPageChange: function(e) {
+		var statusbar = w2ui['actionbar'];
+		var state = e.state;
+		state = this.toLocalePattern('Page %1 of %2', 'Page (\\d+) of (\\d+)', state, '%1', '%2');
+		this.updateToolbarItem(statusbar, 'StatePageNumber', $('#StatePageNumber').html(state ? state : '&nbsp;&nbsp;&nbsp;&nbsp;&nbsp').parent().html());
+	},
 	create: function() {
 		var toolbar = $('#toolbar-down');
 		var that = this;
@@ -283,6 +286,7 @@ L.Control.StatusBar = L.Control.extend({
 		var statusbar = w2ui['actionbar'];
 		var docType = this.map.getDocType();
 		var isReadOnly = this.map.isReadOnlyMode();
+		var canUserWrite = this.map.canUserWrite();
 
 		switch (docType) {
 		case 'spreadsheet':
@@ -335,7 +339,7 @@ L.Control.StatusBar = L.Control.extend({
 					{type: 'break', id: 'break9', mobile: false},
 					{
 						type: 'html', id: 'PermissionMode', mobile: false, tablet: true,
-						html: this._getPermissionModeHtml(isReadOnly)
+						html: this._getPermissionModeHtml(isReadOnly, canUserWrite)
 					}
 				]);
 			}
@@ -371,7 +375,7 @@ L.Control.StatusBar = L.Control.extend({
 					{type: 'break', id: 'break8', mobile: false},
 					{
 						type: 'html', id: 'PermissionMode', mobile: false, tablet: true,
-						html: this._getPermissionModeHtml(isReadOnly)
+						html: this._getPermissionModeHtml(isReadOnly, canUserWrite)
 					}
 				]);
 			}
@@ -392,7 +396,7 @@ L.Control.StatusBar = L.Control.extend({
 					{type: 'break', id: 'break8', mobile: false},
 					{
 						type: 'html', id: 'PermissionMode', mobile: false, tablet: true,
-						html: this._getPermissionModeHtml(isReadOnly)
+						html: this._getPermissionModeHtml(isReadOnly, canUserWrite)
 					}
 				]);
 			}
@@ -412,7 +416,7 @@ L.Control.StatusBar = L.Control.extend({
 					{type: 'break', id: 'break8', mobile: false},
 					{
 						type: 'html', id: 'PermissionMode', mobile: false, tablet: true,
-						html: this._getPermissionModeHtml(isReadOnly)
+						html: this._getPermissionModeHtml(isReadOnly, canUserWrite)
 					}
 				]);
 			}
@@ -433,28 +437,16 @@ L.Control.StatusBar = L.Control.extend({
 			this.map.uiManager.hideStatusBar(true);
 	},
 
-	_cancelSearch: function() {
-		var toolbar = window.mode.isMobile() ? w2ui['searchbar'] : w2ui['actionbar'];
-		var searchInput = L.DomUtil.get('search-input');
-		this.map.resetSelection();
-		toolbar.hide('cancelsearch');
-		toolbar.disable('searchprev');
-		toolbar.disable('searchnext');
-		searchInput.value = '';
-		if (window.mode.isMobile()) {
-			searchInput.focus();
-			// odd, but on mobile we need to invoke it twice
-			toolbar.hide('cancelsearch');
+	_getPermissionModeHtml: function(isReadOnly, canUserWrite) {
+		var permissionModeDiv = '<div id="PermissionMode" class="cool-font ';
+		if (isReadOnly && !canUserWrite) {
+			permissionModeDiv += ' status-readonly-mode" title="' + _('Permission Mode') + '" style="padding: 5px 5px;"> ' + _('Read-only') + ' </div>';
+		} else if (isReadOnly && canUserWrite) {
+			permissionModeDiv += ' status-readonly-transient-mode" style="display: none;"></div>';
+		} else {
+			permissionModeDiv += ' status-edit-mode" title="' + _('Permission Mode') + '" style="padding: 5px 5px;"> ' + _('Edit') + ' </div>';
 		}
-
-		this.map._onGotFocus();
-	},
-
-	_getPermissionModeHtml: function(isReadOnly) {
-		return '<div id="PermissionMode" class="cool-font ' +
-			(isReadOnly
-				? ' status-readonly-mode" title="' + _('Permission Mode') + '" style="padding: 5px 5px;"> ' + _('Read-only') + ' </div>'
-				: ' status-edit-mode" title="' + _('Permission Mode') + '" style="padding: 5px 5px;"> ' + _('Edit') + ' </div>');
+		return permissionModeDiv;
 	},
 
 	onPermissionChanged: function(event) {
@@ -464,7 +456,7 @@ L.Control.StatusBar = L.Control.extend({
 		} else {
 			$('#toolbar-down').removeClass('readonly');
 		}
-		$('#PermissionMode').parent().html(this._getPermissionModeHtml(isReadOnly));
+		$('#PermissionMode').parent().html(this._getPermissionModeHtml(isReadOnly, this.map.canUserWrite()));
 	},
 
 	onCommandStateChanged: function(e) {
@@ -529,8 +521,7 @@ L.Control.StatusBar = L.Control.extend({
 			}
 		}
 		else if (commandName === '.uno:StatePageNumber') {
-			state = this.toLocalePattern('Page %1 of %2', 'Page (\\d+) of (\\d+)', state, '%1', '%2');
-			this.updateToolbarItem(statusbar, 'StatePageNumber', $('#StatePageNumber').html(state ? state : '&nbsp;&nbsp;&nbsp;&nbsp;&nbsp').parent().html());
+			this.onPageChange(e);
 		}
 		else if (commandName === '.uno:StateWordCount') {
 			state = this.toLocalePattern('%1 words, %2 characters', '([\\d,]+) words, ([\\d,]+) characters', state, '%1', '%2');
@@ -572,7 +563,12 @@ L.Control.StatusBar = L.Control.extend({
 
 		toolbaritems.push({ id: 'reset', text: resetLang, uno: constLang + constDefault });
 
-		toolbaritems.push({ id: 'morelanguages', text: _('More...') });
+		toolbaritems.push({ id: 'morelanguages', text: _('Set Language for All text') });
+
+		if (this.map.getDocType() === 'text') {
+			toolbaritems.push({ id: 'langpara', text: _('Set Language for Paragraph') });
+			toolbaritems.push({ id: 'langselection', text: _('Set Language for Selection') });
+		}
 
 		w2ui['actionbar'].set('LanguageStatus', {items: toolbaritems});
 	},

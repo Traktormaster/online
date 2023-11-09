@@ -30,13 +30,6 @@
 #include <sstream>
 #include <random>
 
-// For when we get a delta.
-#if ENABLE_DELTAS
-#  define DELTA_MSG "delta:"
-#else
-#  define DELTA_MSG "tile:"
-#endif
-
 using namespace helpers;
 
 namespace CPPUNIT_NS
@@ -69,6 +62,7 @@ class TileCacheTests : public CPPUNIT_NS::TestFixture
     CPPUNIT_TEST(testDesc);
     CPPUNIT_TEST(testSimple);
     CPPUNIT_TEST(testSimpleCombine);
+    CPPUNIT_TEST(testTileSubscription);
     CPPUNIT_TEST(testSize);
     CPPUNIT_TEST(testDisconnectMultiView);
     CPPUNIT_TEST(testUnresponsiveClient);
@@ -106,6 +100,7 @@ class TileCacheTests : public CPPUNIT_NS::TestFixture
     void testDesc();
     void testSimple();
     void testSimpleCombine();
+    void testTileSubscription();
     void testSize();
     void testDisconnectMultiView();
     void testUnresponsiveClient();
@@ -194,7 +189,7 @@ bool TileCacheTests::getPartFromInvalidateMessage(const std::string& message, in
         part = -1;
         return true;
     }
-    if ((tokens.size() == 3 || tokens.size() == 4) && tokens.equals(1, "EMPTY,"))
+    if (tokens.size() > 2 && tokens.equals(1, "EMPTY,"))
         return COOLProtocol::stringToInteger(tokens[2], part);
     return COOLProtocol::getTokenInteger(tokens, "part", part);
 }
@@ -203,8 +198,8 @@ void TileCacheTests::testDesc()
 {
     constexpr auto testname = __func__;
 
-    TileDesc descA = TileDesc(0, 0, 0, 256, 256, 0, 0, 3200, 3200, /* ignored in cache */ 0, 1234, 1, true);
-    TileDesc descB = TileDesc(0, 0, 0, 256, 256, 0, 0, 3200, 3200, /* ignored in cache */ 1, 1235, 2, false);
+    TileDesc descA = TileDesc(0, 0, 0, 256, 256, 0, 0, 3200, 3200, /* ignored in cache */ 0, 1234, 1);
+    TileDesc descB = TileDesc(0, 0, 0, 256, 256, 0, 0, 3200, 3200, /* ignored in cache */ 1, 1235, 2);
 
     TileDescCacheCompareEq pred;
     LOK_ASSERT_MESSAGE("TileDesc versions do match", descA.getVersion() != descB.getVersion());
@@ -234,7 +229,7 @@ void TileCacheTests::testSimple()
     int tilePosY = 0;
     int tileWidth = 3840;
     int tileHeight = 3840;
-    TileDesc tile(nviewid, part, mode, width, height, tilePosX, tilePosY, tileWidth, tileHeight, -1, 0, -1, false);
+    TileDesc tile(nviewid, part, mode, width, height, tilePosX, tilePosY, tileWidth, tileHeight, -1, 0, -1);
 
     // No Cache
     Tile tileData = tc.lookupTile(tile);
@@ -279,11 +274,13 @@ void TileCacheTests::testSimpleCombine()
     std::vector<char> tile1b = getResponseMessage(socket1, "tile:", testname + "1 ");
     LOK_ASSERT_MESSAGE("did not receive a tile: message as expected", !tile1b.empty());
 
-    sendTextFrame(socket1, "tilecombine nviewid=0 part=0 width=256 height=256 tileposx=0,3840 tileposy=0,0 tilewidth=3840 tileheight=3840");
-    tile1a = getResponseMessage(socket1, "tile:", testname + "1 ");
-    LOK_ASSERT_MESSAGE("did not receive a tile: message as expected", !tile1a.empty());
-    tile1b = getResponseMessage(socket1, "tile:", testname + "1 ");
-    LOK_ASSERT_MESSAGE("did not receive a tile: message as expected", !tile1b.empty());
+    sendTextFrame(socket1, "tilecombine nviewid=0 part=0 width=256 height=256 tileposx=0,3840 tileposy=0,0 oldwid=42,42 tilewidth=3840 tileheight=3840");
+    tile1a = getResponseMessage(socket1, "delta:", testname + "1 ", std::chrono::seconds(10));
+//  TST_LOG("Response is: " + Util::dumpHex(tile1a) << "\n");
+    // no content in an update delta: - so ends with a '\n'
+    LOK_ASSERT_MESSAGE("did not receive an update delta: message as expected", !tile1a.empty() && tile1a.back() == '\n');
+    tile1b = getResponseMessage(socket1, "delta:", testname + "1 ");
+    LOK_ASSERT_MESSAGE("did not receive an update delta: message as expected", !tile1b.empty() && tile1b.back() == '\n');
 
     // Second.
     TST_LOG("Connecting second client.");
@@ -296,6 +293,109 @@ void TileCacheTests::testSimpleCombine()
     LOK_ASSERT_MESSAGE("did not receive a tile: message as expected", !tile2a.empty());
     std::vector<char> tile2b = getResponseMessage(socket2, "tile:", testname + "2 ");
     LOK_ASSERT_MESSAGE("did not receive a tile: message as expected", !tile2b.empty());
+
+    // First - check force keyframe
+    sendTextFrame(socket1, "tilecombine nviewid=0 part=0 width=256 height=256 tileposx=0,3840 tileposy=0,0 oldwid=0,0 tilewidth=3840 tileheight=3840");
+    tile1a = getResponseMessage(socket1, "tile:", testname + "1 ");
+    LOK_ASSERT_MESSAGE("did not receive a tile: message as expected", !tile1a.empty());
+    tile1b = getResponseMessage(socket1, "tile:", testname + "1 ");
+    LOK_ASSERT_MESSAGE("did not receive a tile: message as expected", !tile1b.empty());
+
+    socket1->asyncShutdown();
+    socket2->asyncShutdown();
+
+    LOK_ASSERT_MESSAGE("Expected successful disconnection of the WebSocket 1",
+                       socket1->waitForDisconnection(std::chrono::seconds(5)));
+    LOK_ASSERT_MESSAGE("Expected successful disconnection of the WebSocket 2",
+                       socket2->waitForDisconnection(std::chrono::seconds(5)));
+}
+
+void TileCacheTests::testTileSubscription()
+{
+    const std::string testname = "tileSubscription-";
+    std::string documentPath, documentURL;
+    getDocumentPathAndURL("hello.odt", documentPath, documentURL, testname);
+
+    // First.
+    std::shared_ptr<http::WebSocketSession> socket1
+        = loadDocAndGetSession(_socketPoll, _uri, documentURL, testname + "1 ");
+
+    sendTextFrame(socket1, "tilecombine nviewid=0  part=0 width=256 height=256 tileposx=0,3840 tileposy=0,0 tilewidth=3840 tileheight=3840");
+
+    // std::shared_ptr<TileDesc>
+    auto tile1a = getResponseDesc(socket1, "tile:", testname + "1 ");
+    LOK_ASSERT_MESSAGE("did not receive a tile: message as expected", !!tile1a);
+    auto tile1b = getResponseDesc(socket1, "tile:", testname + "1 ");
+    LOK_ASSERT_MESSAGE("did not receive a tile: message as expected", !!tile1b);
+
+    // type a period
+    sendChar(socket1, '.', skNone, testname);
+
+    // no viewport set so we have to re-request:
+    sendTextFrame(socket1, "tilecombine nviewid=0  part=0 width=256 height=256 tileposx=0,3840 tileposy=0,0 oldwid=42,42 tilewidth=3840 tileheight=3840");
+
+    auto delta1a = getResponseDesc(socket1, "delta:", testname + "1 ");
+    LOK_ASSERT_MESSAGE("did not receive a delta: message as expected", !!delta1a);
+    auto delta1b = getResponseDesc(socket1, "delta:", testname + "1 ");
+    LOK_ASSERT_MESSAGE("did not receive a delta: message as expected", !!delta1b);
+
+    // ordering is undefined tiles arrive in so swap if needed:
+    if (tile1a->getTilePosX() != delta1a->getTilePosX())
+    {
+        std::swap(delta1a, delta1b);
+        TST_LOG("tiles re-ordered for once");
+    }
+
+    // check WIDs variously
+    LOK_ASSERT_EQUAL(tile1a->getWireId(), delta1a->getWireId());
+    LOK_ASSERT_EQUAL(tile1b->getWireId(), delta1b->getWireId());
+
+    // Second.
+    TST_LOG("Connecting second client.");
+    std::shared_ptr<http::WebSocketSession> socket2
+        = loadDocAndGetSession(_socketPoll, _uri, documentURL, testname + "2 ");
+
+    // type a space - get an invalidate - but no change
+    sendChar(socket1, ' ', skNone, testname);
+
+    // we need to wait for the invalidation and message to get to the kit ->
+    // wsd and back - otherwise when we re-fetch tiles we get un-changed ones
+    // from the cache, since wsd has no idea it has changed yet.
+    // so wait for an invalidation
+    assertResponseString(socket1, "invalidatetiles:", testname);
+
+    // two subscriptions on a tile we hope from three requests
+    sendTextFrame(socket1, "tilecombine nviewid=0 part=0 width=256 height=256 tileposx=0,3840 oldwid=42,42 tileposy=0,0 tilewidth=3840 tileheight=3840");
+    sendTextFrame(socket1, "tilecombine nviewid=0 part=0 width=256 height=256 tileposx=0,3840 oldwid=42,42 tileposy=0,0 tilewidth=3840 tileheight=3840");
+    sendTextFrame(socket2, "tilecombine nviewid=0 part=0 width=256 height=256 tileposx=0,3840 tileposy=0,0 tilewidth=3840 tileheight=3840");
+
+    // User 2 should get tiles
+    auto tile2a = getResponseDesc(socket2, "tile:", testname + "1 ");
+    LOK_ASSERT_MESSAGE("did not receive a tile: message as expected", !!tile2a);
+    auto tile2b = getResponseDesc(socket2, "tile:", testname + "1 ");
+    LOK_ASSERT_MESSAGE("did not receive a tile: message as expected", !!tile2b);
+
+    // User 1 should get deltas
+    auto delta1c = getResponseDesc(socket1, "delta:", testname + "1 ");
+    LOK_ASSERT_MESSAGE("did not receive a tile: message as expected", !!delta1c);
+    auto delta1d = getResponseDesc(socket1, "delta:", testname + "1 ");
+    LOK_ASSERT_MESSAGE("did not receive a tile: message as expected", !!delta1d);
+
+    // ordering is undefined tiles arrive in so swap if needed:
+    if (tile2a->getTilePosX() != delta1c->getTilePosX())
+    {
+        std::swap(delta1c, delta1d);
+        TST_LOG("tiles re-ordered for once");
+    }
+    // are they the right tiles ?
+    LOK_ASSERT_EQUAL(tile2a->getTilePosX(), delta1c->getTilePosX());
+    LOK_ASSERT_EQUAL(tile2a->getTilePosY(), delta1c->getTilePosY());
+    LOK_ASSERT_EQUAL(tile2b->getTilePosX(), delta1d->getTilePosX());
+    LOK_ASSERT_EQUAL(tile2b->getTilePosY(), delta1d->getTilePosY());
+
+    // WIDs should match
+    LOK_ASSERT_EQUAL(tile2a->getWireId(), delta1c->getWireId());
+    LOK_ASSERT_EQUAL(tile2b->getWireId(), delta1d->getWireId());
 
     socket1->asyncShutdown();
     socket2->asyncShutdown();
@@ -331,7 +431,7 @@ void TileCacheTests::testSize()
     for (int tilePosY = 0; tilePosY < 20; tilePosY++)
     {
         TileDesc tile(nviewid, part, mode, width, height, tilePosX, tilePosY * tileHeight,
-                      tileWidth, tileHeight, -1, 0, -1, false);
+                      tileWidth, tileHeight, -1, 0, -1);
         tile.setWireId(id++);
         tc.saveTileAndNotify(tile, data.data(), data.size());
     }
@@ -1320,7 +1420,8 @@ void TileCacheTests::testTileRequestByInvalidation()
     assertResponseString(socket, "tile:", testname);
 
     socket->asyncShutdown();
-    socket->waitForDisconnection(std::chrono::seconds(5));
+    LOK_ASSERT_MESSAGE("Expected successful disconnection of the WebSocket",
+                       socket->waitForDisconnection(std::chrono::seconds(5)));
 }
 
 void TileCacheTests::testTileRequestByZoom()
@@ -1389,7 +1490,7 @@ void TileCacheTests::testTileWireIDHandling()
 
     // For the second input wsd will send one tile, since some of them are identical.
     const int arrivedTiles
-        = countMessages(socket, DELTA_MSG, testname, std::chrono::milliseconds(500));
+        = countMessages(socket, "delta:", testname, std::chrono::milliseconds(500));
     if (arrivedTiles == 1)
         return;
 
@@ -1402,7 +1503,7 @@ void TileCacheTests::testTileWireIDHandling()
     assertResponseString(socket, "invalidatetiles:", testname);
 
     LOK_ASSERT_MESSAGE("Expected exactly one tile.",
-                       countMessages(socket, DELTA_MSG, testname, std::chrono::milliseconds(500))
+                       countMessages(socket, "delta:", testname, std::chrono::milliseconds(500))
                            == 1);
 
     socket->asyncShutdown();
@@ -1412,14 +1513,6 @@ void TileCacheTests::testTileWireIDHandling()
 
 void TileCacheTests::testTileProcessed()
 {
-    // FIXME: this test fails all the time with core distro/collabora/co-23.05 branch.
-    // Without the spinandwait: we get 34 tiles back. With spinandwait: we get 19 tiles back.
-    // If we request 25 tiles, we really should get them all back - but it may well be that
-    // in this case we get deltas, or somesuch based on the initially rendered tiles - so
-    // rather than tile: we'd get delta.
-    // The TileCache really needs someone to give it a very hard stare anyway.
-    return;
-
     // Test whether tileprocessed message removes the tiles from the internal tiles-on-fly list
     const char* testname = "testTileProcessed ";
 
@@ -1462,32 +1555,12 @@ void TileCacheTests::testTileProcessed()
 
     } while(gotTile);
 
-    // Now that we force flushing invalidated tiles (Core 2cc955f9109c0fc8443c9f93c1bf6bd317043cb5),
-    // we get 28 tiles instead of the 25 we got previously.
-    LOK_ASSERT_EQUAL_MESSAGE("Expected exactly the requested number of tiles", 28, arrivedTile);
+    LOK_ASSERT_EQUAL_MESSAGE("Expected exactly the requested number of tiles", 25, arrivedTile);
 
     for(std::string& tileID : tileIDs)
     {
         sendTextFrame(socket, "tileprocessed tile=" + tileID, testname);
     }
-
-#if 0 // not needed since deltas + wsd: always subscribe when proactively rendering tiles
-    // Now we can get the remaining tiles
-    int arrivedTile2 = 0;
-    do
-    {
-        std::vector<char> tile = getResponseMessage(socket, "tile:", testname);
-        gotTile = !tile.empty();
-        if(gotTile)
-            ++arrivedTile2;
-
-        if (arrivedTile2 > 1)
-            break; // We got what we expected.
-
-    } while(gotTile);
-
-    LOK_ASSERT_MESSAGE("We expect one tile at least!", arrivedTile2 > 1);
-#endif
 
     socket->asyncShutdown();
     LOK_ASSERT_MESSAGE("Expected successful disconnection of the WebSocket",
@@ -1575,7 +1648,7 @@ void TileCacheTests::testTileBeingRenderedHandling()
         assertResponseString(socket, "invalidatetiles:", testname);
 
         const int arrivedTiles
-            = countMessages(socket, DELTA_MSG, testname, std::chrono::milliseconds(500));
+            = countMessages(socket, "delta:", testname, std::chrono::milliseconds(500));
         if (arrivedTiles != 1)
         {
             // Or, at most 2. The reason is that sometimes we get line antialiasing differences that
@@ -1590,7 +1663,7 @@ void TileCacheTests::testTileBeingRenderedHandling()
 
             LOK_ASSERT_MESSAGE(
                 "Expected exactly one tile.",
-                countMessages(socket, DELTA_MSG, testname, std::chrono::milliseconds(500)) == 1);
+                countMessages(socket, "delta:", testname, std::chrono::milliseconds(500)) == 1);
         }
     }
 
@@ -1652,7 +1725,7 @@ void TileCacheTests::testWireIDFilteringOnWSDSide()
     assertResponseString(socket1, "invalidatetiles:", testname);
 
     LOK_ASSERT_MESSAGE("Expected exactly one tile.",
-                       countMessages(socket1, DELTA_MSG, testname, std::chrono::seconds(1)) == 1);
+                       countMessages(socket1, "delta:", testname, std::chrono::seconds(1)) == 1);
 
     //2. Now request the same tiles by the other client (e.g. scroll to the same view)
 

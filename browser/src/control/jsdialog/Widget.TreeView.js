@@ -1,5 +1,11 @@
 /* -*- js-indent-level: 8 -*- */
 /*
+ * Copyright the Collabora Online contributors.
+ *
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
+/*
  * JSDialog.TreeView - tree view widget with or without header
  *
  * Example JSON:
@@ -8,8 +14,8 @@
  *     id: 'id',
  *     type: 'treelistbox',
  *     entries: [
- *         { row: 0, text: 'first entry', children: [ { row: 2, text: 'first subentry' } ] },
- *         { row: 1, text: 'second entry', selected: true, state: false, ondemand: true }
+ *         { row: 0, text: 'first entry', collapsed: true, children: [ { row: 1, text: 'first subentry' } ] },
+ *         { row: 2, text: 'second entry', selected: true, state: false, ondemand: true }
  *     ]
  * }
  *
@@ -24,18 +30,45 @@
  *     ]
  * }
  *
+ * c) with header and is a tree, not a list
+ * {
+ *     id: 'id',
+ *     type: 'treelistbox',
+ *     headers: [ { text: 'first column' }, { text: 'second' }],
+ *     entries: [
+ *         { row: 0, columns [ { text: 'a' }, { collapsed: 'collapsedIcon.svg' } ] },
+ *         { row: 1, columns [ { text: 'a' }, { collapsed: 'collapsedIcon.svg' } ],
+ * 			   children: [
+ *                 { row: 2, columns [ { text: 'a2' }, { expanded: 'expandedIcon.svg' }, selected: true ]}
+ *             ]
+ *         },
+ *     ]
+ * }
+ *
  * 'row' property is used in the callback to differentiate entries
  * 'state' property defines if entry has the checkbox (false/true), when is missing - no checkbox
  * 'ondemand' property can be set to provide nodes lazy loading
- *
- * Copyright the Collabora Online contributors.
- *
- * SPDX-License-Identifier: MPL-2.0
+ * 'collapsed' property means, this entry have childrens, but they are not visible, because
+ *             this branch is collapsed.
  */
 
 /* global $ _ JSDialog */
 
 var treeType = '';
+
+function _findEntryWithRow(entries, row) {
+	for (var i in entries) {
+		if (i == row)
+			return entries[i];
+		else if (entries[i].children) {
+			var found = _findEntryWithRow(entries[i].children, row);
+			if (found)
+				return found;
+		}
+	}
+
+	return null;
+}
 
 function _createCheckbox(parentContainer, treeViewData, builder, entry) {
 	var checkbox = L.DomUtil.create('input', builder.options.cssClass + ' ui-treeview-checkbox', parentContainer);
@@ -48,10 +81,14 @@ function _createCheckbox(parentContainer, treeViewData, builder, entry) {
 	if (treeViewData.enabled !== false && treeViewData.enabled !== 'false') {
 		$(checkbox).change(function() {
 			if (this.checked) {
-				treeViewData.entries[entry.row].state = true;
+				var foundEntry = _findEntryWithRow(treeViewData.entries, entry.row);
+				if (foundEntry)
+					foundEntry.state = true;
 				builder.callback('treeview', 'change', treeViewData, {row: entry.row, value: true}, builder);
 			} else {
-				treeViewData.entries[entry.row].state = false;
+				var foundEntry = _findEntryWithRow(treeViewData.entries, entry.row);
+				if (foundEntry)
+					foundEntry.state = false;
 				builder.callback('treeview', 'change', treeViewData, {row: entry.row, value: false}, builder);
 			}
 		});
@@ -103,6 +140,8 @@ function _getCellIconId(cellData) {
 	return iconId;
 }
 
+var lastClickHelperRow = -1;
+var lastClickHelperId = '';
 function _treelistboxEntry(parentContainer, treeViewData, entry, builder, isTreeView, treeRoot) {
 	if (entry.text == '<dummy>')
 		return;
@@ -162,19 +201,25 @@ function _treelistboxEntry(parentContainer, treeViewData, entry, builder, isTree
 	}
 
 	var toggleFunction = function() {
+		if (L.DomUtil.hasClass(span, 'collapsed'))
+			builder.callback('treeview', 'expand', treeViewData, entry.row, builder);
+		else
+			builder.callback('treeview', 'collapse', treeViewData, entry.row, builder);
 		$(span).toggleClass('collapsed');
 	};
 
 	var expandFunction = function () {
 		if (entry.ondemand && L.DomUtil.hasClass(span, 'collapsed'))
 			builder.callback('treeview', 'expand', treeViewData, entry.row, builder);
-		toggleFunction();
+		$(span).toggleClass('collapsed');
 	};
 
 	if (entry.children) {
 		var ul = L.DomUtil.create('ul', builder.options.cssClass, li);
-		for (var i in entry.children) {
-			_treelistboxEntry(ul, treeViewData, entry.children[i], builder, isTreeView, treeRoot);
+		if (!entry.collapsed) {
+			for (var i in entry.children) {
+				_treelistboxEntry(ul, treeViewData, entry.children[i], builder, isTreeView, treeRoot);
+			}
 		}
 
 		if (!disabled) {
@@ -189,7 +234,7 @@ function _treelistboxEntry(parentContainer, treeViewData, entry, builder, isTree
 				$(checkbox).click(toggleFunction);
 		}
 
-		if (entry.ondemand)
+		if (entry.ondemand || entry.collapsed)
 			L.DomUtil.addClass(span, 'collapsed');
 	}
 
@@ -231,8 +276,44 @@ function _treelistboxEntry(parentContainer, treeViewData, entry, builder, isTree
 		});
 
 		if (!singleClick) {
-			$(text).dblclick(doubleClickFunction);
+			if (window.ThisIsTheiOSApp) {
+				text.addEventListener('click', function() {
+					if (entry.row == lastClickHelperRow && treeViewData.id == lastClickHelperId)
+						doubleClickFunction();
+					else {
+						lastClickHelperRow = entry.row;
+						lastClickHelperId = treeViewData.id;
+						setTimeout(function() {
+							lastClickHelperRow = -1;
+						}, 300);
+					}
+				});
+			} else {
+				$(text).dblclick(doubleClickFunction);
+			}
 		}
+	}
+}
+
+function _getLevel(element) {
+	return element.getAttribute('aria-level');
+}
+
+function _expandTreeGrid(element) {
+	var wasExpanded = element.getAttribute('aria-expanded') === 'true';
+	var level = _getLevel(element);
+
+	element.setAttribute('aria-expanded', wasExpanded ? false : true);
+
+	// show/hide sub entries
+	var sibling = element.nextSibling;
+	while (sibling && _getLevel(sibling) > level) {
+		if (wasExpanded)
+			L.DomUtil.addClass(sibling, 'hidden');
+		else
+			L.DomUtil.removeClass(sibling, 'hidden');
+
+		sibling = sibling.nextSibling;
 	}
 }
 
@@ -250,9 +331,17 @@ function _headerlistboxEntry(parentContainer, treeViewData, entry, builder) {
 	var clickFunction = _createClickFunction('.ui-listview-entry', parentContainer.parentNode,
 		parentContainer, checkbox, true, false, builder, treeViewData, entry);
 
+	var expander = null; // present in TreeGrid
+
 	for (var i in entry.columns) {
 		var td = L.DomUtil.create('td', '', parentContainer);
 		td.setAttribute('role', 'gridcell');
+
+		// this is tree grid (tree with headers)
+		if (i == 0 && entry.children) {
+			var expander = L.DomUtil.create('div', builder.options.cssClass + ' ui-treeview-expander', td);
+			expander.addEventListener('click', function () { _expandTreeGrid(parentContainer); });
+		}
 
 		if (entry.columns[i].collapsed || entry.columns[i].expanded) {
 			var icon = L.DomUtil.create('img', 'ui-listview-icon', td);
@@ -269,7 +358,12 @@ function _headerlistboxEntry(parentContainer, treeViewData, entry, builder) {
 
 	if (!disabled) {
 		parentContainer.addEventListener('keydown', function onEvent(event) {
-			if (event.key === 'Enter' || event.key === ' ') {
+			if (event.key === ' ' && expander) {
+				expander.click();
+				parentContainer.focus();
+				event.preventDefault();
+				event.stopPropagation();
+			} else if (event.key === 'Enter' || event.key === ' ') {
 				clickFunction();
 				if (checkbox)
 					checkbox.click();
@@ -291,7 +385,37 @@ function _hasIcon(columns) {
 	return false;
 }
 
-function _createHeaders(tbody, data, builder) {
+// returns 0 in case of flat list
+function _calulateTreeDepth(entries) {
+	var depth = 0;
+	for (var i in entries) {
+			var entry = entries[i];
+			if (entry.children && entry.children.length) {
+					var entryDepth = _calulateTreeDepth(entry.children) + 1;
+					if (entryDepth > depth)
+							depth = entryDepth;
+			}
+	}
+	return depth;
+}
+
+// children are moved to the root level and have depth parameter added
+function _makeTreeFlat(entries, depth) {
+	var flatList = [];
+	for (var i in entries) {
+		var entry = entries[i];
+		entry.depth = depth;
+		flatList.push(entry);
+
+		if (entry.children && entry.children.length) {
+			var flatChildren = _makeTreeFlat(entry.children, depth + 1);
+			flatList = flatList.concat(flatChildren);
+		}
+	}
+	return flatList;
+}
+
+function _createHeaders(tbody, data, builder, depth) {
 	var headers = L.DomUtil.create('tr', builder.options.cssClass + ' ui-treeview-header', tbody);
 	headers.setAttribute('role', 'row');
 	var hasCheckboxes = data.entries && data.entries.length && data.entries[0].state !== undefined;
@@ -300,6 +424,8 @@ function _createHeaders(tbody, data, builder) {
 	var hasIcons = data.entries && data.entries.length && _hasIcon(data.entries[0].columns);
 	if (hasIcons)
 		data.headers = [{ text: '' }].concat(data.headers);
+	var isTreeGrid = depth > 0;
+
 	for (var h in data.headers) {
 		var header = L.DomUtil.create('th', builder.options.cssClass, headers);
 		header.setAttribute('role', 'columnheader');
@@ -367,7 +493,8 @@ function _createHeaders(tbody, data, builder) {
 			};
 		};
 
-		header.onclick = clickFunction(h, headerSortIcon);
+		if (!isTreeGrid)
+			header.onclick = clickFunction(h, headerSortIcon);
 	}
 }
 
@@ -426,15 +553,24 @@ function _handleKeyEvent(event, listElements, builder, data) {
 	if (event.key === 'ArrowDown') {
 		if (currIndex < 0)
 			_changeFocusedRow(listElements, currIndex, 0);
-		else if (currIndex < treeLength - 1)
-			_changeFocusedRow(listElements, currIndex, currIndex + 1);
-
+		else {
+			var nextIndex = currIndex + 1;
+			while (nextIndex < treeLength - 1 && listElements[nextIndex].clientHeight <= 0)
+				nextIndex++;
+			if (nextIndex < treeLength)
+				_changeFocusedRow(listElements, currIndex, nextIndex);
+		}
 		preventDef = true;
 	} else if (event.key === 'ArrowUp') {
 		if (currIndex < 0)
 			_changeFocusedRow(listElements, currIndex, treeLength - 1);
-		else if (currIndex > 0)
-			_changeFocusedRow(listElements, currIndex, currIndex - 1);
+		else {
+			var nextIndex = currIndex - 1;
+			while (nextIndex >= 0 && listElements[nextIndex].clientHeight <= 0)
+				nextIndex--;
+			if (nextIndex >= 0)
+				_changeFocusedRow(listElements, currIndex, nextIndex);
+		}
 
 		preventDef = true;
 	} else if (data.fireKeyEvents && builder.callback('treeview', 'keydown', { id: data.id, key: event.key }, currIndex, builder)) {
@@ -458,9 +594,10 @@ function _treelistboxControl(parentContainer, data, builder) {
 
 	var tbody = L.DomUtil.create('tbody', builder.options.cssClass + ' ui-treeview-body', table);
 
+	var depth = _calulateTreeDepth(data.entries);
 	var isHeaderListBox = data.headers && data.headers.length !== 0;
 	if (isHeaderListBox)
-		_createHeaders(tbody, data, builder);
+		_createHeaders(tbody, data, builder, depth);
 
 	if (!disabled) {
 		tbody.ondrop = function (ev) {
@@ -475,6 +612,7 @@ function _treelistboxControl(parentContainer, data, builder) {
 	}
 
 	if (!data.entries || data.entries.length === 0) {
+		// contentbox and tree can never be empty, 1 page or 1 sheet always exists
 		if (data.id === 'contenttree') {
 			var tr = L.DomUtil.create('tr', builder.options.cssClass + ' ui-listview-entry', tbody);
 			tr.setAttribute('role', 'row');
@@ -489,10 +627,17 @@ function _treelistboxControl(parentContainer, data, builder) {
 		// list view with headers
 		table.setAttribute('role', 'grid');
 
-		for (var i in data.entries) {
+		var flatEntries = _makeTreeFlat(data.entries, 0);
+
+		for (var i in flatEntries) {
 			var tr = L.DomUtil.create('tr', builder.options.cssClass + ' ui-listview-entry', tbody);
 			tr.setAttribute('role', 'row');
-			_headerlistboxEntry(tr, data, data.entries[i], builder);
+			var entry = flatEntries[i];
+			if (depth > 0)
+				tr.setAttribute('aria-level', entry.depth + 1);
+			if (entry.children && entry.children.length)
+				tr.setAttribute('aria-expanded', true);
+			_headerlistboxEntry(tr, data, entry, builder);
 		}
 
 		table.addEventListener('keydown', function onEvent(event) {

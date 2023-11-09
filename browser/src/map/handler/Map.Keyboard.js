@@ -103,6 +103,7 @@ L.Map.Keyboard = L.Handler.extend({
 		120 : UNOKey.F9,
 		121 : UNOKey.F10,
 		122 : UNOKey.F11,
+		123 : UNOKey.F12,
 		144 : UNOKey.NUMLOCK,
 		145 : UNOKey.SCROLLLOCK,
 		173 : UNOKey.SUBTRACT,
@@ -228,6 +229,7 @@ L.Map.Keyboard = L.Handler.extend({
 		F9:       120,
 		F10:      121,
 		F11:      122,
+		F12 :     123,
 		NUMLOCK:  144,
 		SCROLLLOCK:   145,
 		SUBTRACT:     [109,173,189],
@@ -252,6 +254,39 @@ L.Map.Keyboard = L.Handler.extend({
 		up:      [38],
 		zoomIn:  [187, 107, 61, 171],
 		zoomOut: [189, 109, 173]
+	},
+
+	allowedKeyCodeWhenNotEditing: {
+		27:    true,  // ESC
+		33:    true,  // pageUp
+		34:    true,  // pageDown
+		13:    true,  // enter
+		 8:    true,  // BACKSPACE
+		16:    true,  // SHIFT
+		17:    true,  // CTRL
+		18:    true,  // ALT
+		19:    true,  // PAUSE
+		20:    true,  // CAPSLOCK
+		35:    true,  // END
+		36:    true,  // HOME
+		45:    true,  // INSERT
+		46:    true,  // DELETE
+		91:    true,  // LEFTWINDOWKEY
+		92:    true,  // RIGHTWINDOWKEY
+		112:    true,  //F1
+		113:    true,  //F2
+		114:    true,  //F3
+		115:    true,  //F4
+		116:    true,  //F5
+		117:    true,  //F6
+		118:    true,  //F7
+		119:    true,  //F8
+		120:    true,  //F9
+		121:    true,  //F10
+		122:    true,  //F11
+		123:    true,  //F12
+		144:    true,  //NUMLOCK
+		145:    true,  //SCROLLLOCK
 	},
 
 	initialize: function (map) {
@@ -356,14 +391,17 @@ L.Map.Keyboard = L.Handler.extend({
 		if (this._map.uiManager.isUIBlocked())
 			return;
 
-		if (this._map.jsdialog && this._map.jsdialog.hasDialogOpened()
+		if (this._map.jsdialog
+			&& (this._map.jsdialog.hasDialogOpened() || this._map.jsdialog.hasSnackbarOpened() || this._map.jsdialog.hasDropdownOpened())
 			&& this._map.jsdialog.handleKeyEvent(ev)) {
 			ev.preventDefault();
 			return;
 		}
-		else if (this._map._docLayer._docType === 'presentation' || this._map._docLayer._docType === 'drawing' && this._map._docLayer._preview.partsFocused === true) {
+		else if (this._map._docLayer && (this._map._docLayer._docType === 'presentation' || this._map._docLayer._docType === 'drawing') && this._map._docLayer._preview.partsFocused === true) {
+
 			if (!this.modifier && (ev.keyCode === this.keyCodes.DOWN || ev.keyCode === this.keyCodes.UP || ev.keyCode === this.keyCodes.RIGHT || ev.keyCode === this.keyCodes.LEFT
 				|| ev.keyCode === this.keyCodes.DELETE || ev.keyCode === this.keyCodes.BACKSPACE) && ev.type === 'keydown') {
+
 				var partToSelect = (ev.keyCode === this.keyCodes.UP || ev.keyCode === this.keyCodes.LEFT) ? 'prev' : 'next';
 				var deletePart = (ev.keyCode === this.keyCodes.DELETE || ev.keyCode === this.keyCodes.BACKSPACE) ? true: false;
 
@@ -377,6 +415,12 @@ L.Map.Keyboard = L.Handler.extend({
 				}
 				ev.preventDefault();
 				return;
+			}
+			else if (ev.ctrlKey) {
+				if (!ev.altKey && ev.keyCode === this.keyCodes.HOME)
+					this._map.setPart(0);
+				else if (!ev.altKey && ev.keyCode === this.keyCodes.END)
+					this._map.setPart(this._map._docLayer._parts - 1);
 			}
 			else {
 				this._map._docLayer._preview.partsFocused = false;
@@ -457,7 +501,44 @@ L.Map.Keyboard = L.Handler.extend({
 
 		// handle help - F1
 		if (ev.type === 'keydown' && !ev.altKey && !this.modifier && keyCode === this.keyCodes.F1) {
-			this._map.showHelp('online-help');
+			this._map.showHelp('online-help-content');
+			ev.preventDefault();
+			return;
+		}
+
+		// save-as for German shortcuts - F12.
+		if (ev.type === 'keydown' && !ev.altKey && !this.modifier && keyCode === this.keyCodes.F12 && app.UI.language.fromURL === 'de' && ['text', 'spreadsheet', 'presentation'].includes(docType)) {
+			if (this._map.uiManager.getCurrentMode() === 'notebookbar') {
+				this._map.openSaveAs(); // Opens save as dialog if integrator supports it.
+				ev.preventDefault();
+				return;
+			}
+		}
+
+		if (ev.type === 'keydown' && !ev.altKey && ev.shiftKey && keyCode === this.keyCodes.F9 && app.UI.language.fromURL === 'de' && docType === 'presentation') {
+			this._map.sendUnoCommand('.uno:GridVisible');
+			ev.preventDefault();
+			return;
+		}
+
+		if (ev.type === 'keydown' && !ev.altKey && ev.shiftKey && keyCode === this.keyCodes.F3 && app.UI.language.fromURL === 'de' && docType === 'presentation') {
+			this._map.sendUnoCommand('.uno:ChangeCaseRotateCase');
+			ev.preventDefault();
+			return;
+		}
+
+		if (ev.type === 'keydown' && !ev.altKey && ev.shiftKey && keyCode === this.keyCodes.F5 && app.UI.language.fromURL === 'de' && docType === 'presentation') {
+			this._map.fire('fullscreen', { startSlideNumber: this._map.getCurrentPartNumber() });
+			ev.preventDefault();
+			return;
+		}
+
+		if (ev.type === 'keydown' && !ev.altKey && ev.shiftKey && keyCode === this.keyCodes.F3 && app.UI.language.fromURL === 'de' && ['text', 'spreadsheet'].includes(docType)) {
+			if (docType === 'text')
+				this._map.sendUnoCommand('.uno:ChangeCaseRotateCase');
+			else if (docType === 'spreadsheet')
+				this._map.sendUnoCommand('.uno:FunctionDialog'); // Insert function wizard in Calc.
+
 			ev.preventDefault();
 			return;
 		}
@@ -487,13 +568,47 @@ L.Map.Keyboard = L.Handler.extend({
 			return;
 		}
 
+		// Comment in Calc.
+		if (ev.type === 'keydown' && ev.shiftKey && !ev.altKey && keyCode === this.keyCodes.F2 && docType === 'spreadsheet' && app.UI.language.fromURL === 'de') {
+			this._map.insertComment();
+			ev.preventDefault();
+			return;
+		}
+
+		if (ev.type === 'keydown' && !this.modifier && keyCode === this.keyCodes.F4 && docType === 'spreadsheet' && app.UI.language.fromURL === 'de') {
+			if (this._map._docLayer.insertMode === true) {
+				this._map.sendUnoCommand('.uno:ToggleRelative');
+				ev.preventDefault();
+				return;
+			}
+		}
+
+		// Recalculate Calc.
+		if (ev.type === 'keydown' && !this.modifier && keyCode === this.keyCodes.F9 && docType === 'spreadsheet' && app.UI.language.fromURL === 'de') {
+			this._map.sendUnoCommand('.uno:Calculate');
+			ev.preventDefault();
+			return;
+		}
+
 		// don't trigger browser reload on F5, launch slideshow in Impress
 		if (ev.type === 'keydown' && keyCode === this.keyCodes.F5) {
 			ev.preventDefault();
-			if (docType === 'presentation')
-			{
+			if (docType === 'presentation') {
 				this._map.fire('fullscreen');
 			}
+			else if (docType === 'text' && !this.modifier && app.UI.language.fromURL === 'de') {
+				this._map.sendUnoCommand('.uno:GoToPage');
+			}
+			else if (docType === 'spreadsheet' && !this.modifier && app.UI.language.fromURL === 'de') {
+				document.getElementById('addressInput').focus();
+			}
+
+			return;
+		}
+
+		if (ev.type === 'keydown' && ev.altKey && this.keyCodes.NUM0.includes(ev.keyCode)) {
+			app.socket.sendMessage('uno .uno:FormatCellDialog');
+			ev.preventDefault();
 			return;
 		}
 
@@ -526,7 +641,12 @@ L.Map.Keyboard = L.Handler.extend({
 				if (this.handleOnKeyDownKeys[keyCode] && charCode === 0) {
 					if (keyEventFn) {
 						keyEventFn('input', charCode, unoKeyCode);
-						ev.preventDefault();
+						if (!(this._map._textInput.hasAccessibilitySupport() && this._map._textInput.hasFocus() &&
+							(keyCode === this.keyCodes.LEFT || keyCode === this.keyCodes.RIGHT))) {
+							ev.preventDefault();
+						} else {
+							window.app.console.log('Map.Keyboard._handleKeyEvent: default not prevented for left or right arrow.');
+						}
 					}
 				}
 			}
@@ -635,59 +755,102 @@ L.Map.Keyboard = L.Handler.extend({
 		if (e.keyCode == this.keyCodes.CTRL)
 			return true;
 
-		if (e.type !== 'keydown' && e.key !== 'c' && e.key !== 'v' && e.key !== 'x' &&
+		if (e.type !== 'keydown' && e.keyCode !== this.keyCodes.C[DEFAULT] && e.keyCode !== this.keyCodes.V[DEFAULT] && e.keyCode !== this.keyCodes.X[DEFAULT] &&
 		/* Safari */ e.keyCode !== this.keyCodes.C[MAC] && e.keyCode !== this.keyCodes.V[MAC] && e.keyCode !== this.keyCodes.X[MAC]) {
 			e.preventDefault();
 			return true;
 		}
 
 		if (e.keyCode !== this.keyCodes.C[DEFAULT] && e.keyCode !== this.keyCodes.V[DEFAULT] && e.keyCode !== this.keyCodes.X[DEFAULT] &&
-		/* Safari */ e.keyCode !== this.keyCodes.C[MAC] && e.keyCode !== this.keyCodes.V[MAC] && e.keyCode !== this.keyCodes.X[MAC] &&
-			e.key !== 'c' && e.key !== 'v' && e.key !== 'x') {
+		/* Safari */ e.keyCode !== this.keyCodes.C[MAC] && e.keyCode !== this.keyCodes.V[MAC] && e.keyCode !== this.keyCodes.X[MAC]) {
 			// not copy or paste
 			e.preventDefault();
 		}
 
+		// CTRL + ALT + N for new document. This needs to be handled by the integrator.
+		if (this._isCtrlKey(e) && e.altKey && e.keyCode === this.keyCodes.N) {
+			this._map.fire('postMessage', {msgId: 'UI_CreateFile', args: { DocumentType: this._map.getDocType() }});
+			e.preventDefault();
+			return true;
+		}
+
+		// CTRL + SHIFT + L is added to the core side for writer. Others can also be checked.
+		if (this._isCtrlKey(e) && e.shiftKey && e.keyCode === this.keyCodes.L && this._map.getDocType() !== 'text' && this._map.getDocType() !== 'spreadsheet') {
+			app.socket.sendMessage('uno .uno:DefaultBullet');
+			e.preventDefault();
+			return true;
+		}
+
+		// CTRL + ALT + O to open a document. This needs to be handled by the integrator.
+		if (this._isCtrlKey(e) && e.altKey && e.keyCode === this.keyCodes.O) {
+			this._map.fire('postMessage', { msgId: 'UI_OpenDocument' });
+			e.preventDefault();
+			return true;
+		}
+
 		if (this._isCtrlKey(e) && e.shiftKey && e.key === '?') {
-			this._map.showHelp('keyboard-shortcuts');
+			this._map.showHelp('keyboard-shortcuts-content');
 			e.preventDefault();
 			return true;
 		}
 
 		// Handles paste special. The "Your browser" thing seems to indicate that this code
 		// snippet is relevant in a browser only.
-		if (!window.ThisIsAMobileApp && e.ctrlKey && e.shiftKey && e.altKey && (e.key === 'v' || e.key === 'V')) {
+		if (!window.ThisIsAMobileApp && e.ctrlKey && e.shiftKey && e.altKey && this.keyCodes.V.includes(e.keyCode)) {
 			this._map._clip._openPasteSpecialPopup();
 			return true;
 		}
 
 		// Handles unformatted paste
-		if (this._isCtrlKey(e) && e.shiftKey && (e.key === 'v' || e.key === 'V')) {
+		if (this._isCtrlKey(e) && e.shiftKey && this.keyCodes.V.includes(e.keyCode)) {
 			return true;
 		}
 
-		if (this._isCtrlKey(e) && (e.key === 'k' || e.key === 'K')) {
+		// Collapse / expand notebookbar.
+		if (this._isCtrlKey(e) && e.keyCode === this.keyCodes.F1) {
+			if (this._map.uiManager.getCurrentMode() === 'notebookbar') {
+				if (this._map.uiManager.isNotebookbarCollapsed())
+					this._map.uiManager.extendNotebookbar();
+				else
+					this._map.uiManager.collapseNotebookbar();
+			}
+			return true;
+		}
+
+		if (this._isCtrlKey(e) && !e.shiftKey && e.keyCode === this.keyCodes.K) {
 			this._map.showHyperlinkDialog();
 			e.preventDefault();
 			return true;
 		}
 
-		if (this._isCtrlKey(e) && (e.key === 'z' || e.key === 'Z')) {
+		if (this._isCtrlKey(e) && e.keyCode === this.keyCodes.Z) {
 			app.socket.sendMessage('uno .uno:Undo');
 			e.preventDefault();
 			return true;
 		}
 
-		if (this._isCtrlKey(e) && (e.key === 'y' || e.key === 'Y')) {
+		if (this._isCtrlKey(e) && e.keyCode === this.keyCodes.Y) {
 			app.socket.sendMessage('uno .uno:Redo');
 			e.preventDefault();
 			return true;
 		}
 
-		if (this._isCtrlKey(e) && !e.shiftKey && !e.altKey && (e.key === 'f' || e.key === 'F')) {
-			if (!this._map.uiManager.isStatusBarVisible()) {
-				this._map.uiManager.showStatusBar();
+		if (this._isCtrlKey(e) && !e.shiftKey && !e.altKey && e.keyCode === this.keyCodes.F) {
+			if (app.UI.language.fromURL === 'de' && this._map.getDocType() === 'text') {
+				this._map.sendUnoCommand('.uno:Navigator');
 			}
+			else {
+				if (!this._map.uiManager.isStatusBarVisible()) {
+					this._map.uiManager.showStatusBar();
+				}
+				this._map.fire('focussearch');
+			}
+
+			e.preventDefault();
+			return true;
+		}
+
+		if (this._isCtrlKey(e) && !e.shiftKey && e.altKey && e.keyCode === this.keyCodes.S && app.UI.language.fromURL === 'de' && this._map.getDocType() === 'text') {
 			this._map.fire('focussearch');
 			e.preventDefault();
 			return true;
@@ -696,7 +859,7 @@ L.Map.Keyboard = L.Handler.extend({
 		if (e.altKey || e.shiftKey) {
 
 			// need to handle Ctrl + Alt + C separately for Firefox
-			if (e.key === 'c' && e.altKey) {
+			if (this.keyCodes.C.includes(e.keyCode) && e.altKey) {
 				this._map.insertComment();
 				return true;
 			}
@@ -717,6 +880,39 @@ L.Map.Keyboard = L.Handler.extend({
 				case this.keyCodes.D: // d
 					app.socket.sendMessage('uno .uno:InsertEndnote');
 					return true;
+				case this.keyCodes.P:
+					var userListSummary = document.getElementById('userListSummary');
+					var userListPopover = document.getElementById('userListPopover');
+					// checking case ''(empty string) is because when element loads first time it does not have any inline display style
+					var isUserListPopoverVisible = userListPopover.style.display === 'none' || userListPopover.style.display === '';
+					// we should only show user list when there are multiple users present and user list is hidden
+					var showUserList = isUserListPopoverVisible && userListSummary.hasChildNodes();
+					if (showUserList) {
+						userListSummary.click();
+					}
+					else {
+						userListPopover.style.display = 'none';
+					}
+					e.preventDefault();
+					return true;
+				case this.keyCodes.pageUp:
+				case this.keyCodes.pageDown :
+					if (this._map.getDocType() === 'spreadsheet') {
+						var currentSelectedPart = this._map._docLayer._selectedPart;
+						var parts = this._map._docLayer._parts;
+						var partToSelect = 0;
+						this._map._docLayer._clearReferences();
+
+						if (e.keyCode === this.keyCodes.pageUp) {
+							partToSelect = currentSelectedPart != parts - 1 ? currentSelectedPart + 1 : 0;
+						}
+						else {
+							partToSelect = currentSelectedPart != 0 ? currentSelectedPart - 1 : parts - 1;
+						}
+						this._map.setPart(parseInt(partToSelect), /*external:*/ false, /*calledFromSetPartHandler:*/ true);
+						return;
+					}
+
 				}
 			} else if (e.altKey) {
 				switch (e.keyCode) {
@@ -729,15 +925,15 @@ L.Map.Keyboard = L.Handler.extend({
 		}
 		/* Without specifying the key type, the messages are sent twice (both keydown/up) */
 		if (e.type === 'keydown' && window.ThisIsAMobileApp) {
-			if (e.key === 'c' || e.key === 'C') {
+			if (this.keyCodes.C.includes(e.keyCode)) {
 				app.socket.sendMessage('uno .uno:Copy');
 				return true;
 			}
-			else if (e.key === 'v' || e.key === 'V') {
+			else if (this.keyCodes.V.includes(e.keyCode)) {
 				app.socket.sendMessage('uno .uno:Paste');
 				return true;
 			}
-			else if (e.key === 'x' || e.key === 'X') {
+			else if (this.keyCodes.X.includes(e.keyCode)) {
 				app.socket.sendMessage('uno .uno:Cut');
 				return true;
 			}
@@ -799,7 +995,7 @@ L.Map.Keyboard = L.Handler.extend({
 			return true;
 		}
 		if (e.type === 'keypress' && (e.ctrlKey || e.metaKey) &&
-			(e.key === 'c' || e.key === 'v' || e.key === 'x')) {
+			(this.keyCodes.C.includes(e.keyCode) ||this.keyCodes.V.includes(e.keyCode) || this.keyCodes.X.includes(e.keyCode))) {
 			// need to handle this separately for Firefox
 			return true;
 		}
@@ -814,7 +1010,7 @@ L.Map.Keyboard = L.Handler.extend({
 		else if (e.type === 'keydown' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.keyCode === this.keyCodes.F1)
 			return true;
 		// comment insert
-		else if (e.key === 'c' && e.altKey && e.altKey && e.ctrlKey && this._map.isPermissionEditForComments())
+		else if (this.keyCodes.C.includes(e.keyCode) && e.altKey && e.altKey && e.ctrlKey && this._map.isPermissionEditForComments())
 			return true;
 		// full-screen presentation
 		else if (e.type === 'keydown' && e.keyCode === this.keyCodes.F5 && this._map._docLayer._docType === 'presentation')

@@ -93,12 +93,28 @@ struct TileData
 
         size_t oldSize = size();
 
-        // FIXME: too many/large deltas means we should reset -
-        // but not here - when requesting the tiles.
-        _wids.push_back(id);
-        _offsets.push_back(_deltas.size());
-        _deltas.resize(oldSize + dataSize - 1);
-        std::memcpy(_deltas.data() + oldSize, data + 1, dataSize - 1);
+        // If we have an empty delta at the end - then just
+        // bump the associated wid. There is no risk to sending
+        // an empty delta twice.x
+        if (dataSize == 1 && // just a 'D'
+            _offsets.size() > 1 &&
+            _offsets.back() == _deltas.size())
+        {
+            LOG_TRC("received empty delta - bumping wid from " << _wids.back() << " to " << id);
+            _wids.back() = id;
+        }
+        else
+        {
+            // FIXME: too many/large deltas means we should reset -
+            // but not here - when requesting the tiles.
+            _wids.push_back(id);
+            _offsets.push_back(_deltas.size());
+            if (dataSize > 1)
+            {
+                _deltas.resize(oldSize + dataSize - 1);
+                std::memcpy(_deltas.data() + oldSize, data + 1, dataSize - 1);
+            }
+        }
 
         // FIXME: possible race - should store a seq. from the invalidation(s) ?
         _valid = true;
@@ -192,8 +208,6 @@ class TileCache
     std::shared_ptr<TileBeingRendered> findTileBeingRendered(const TileDesc& tile);
 
 public:
-    typedef std::pair<int, int> PartModePair;
-
     /// When the docURL is a non-file:// url, the timestamp has to be provided by the caller.
     /// For file:// url's, it's ignored.
     /// When it is missing for non-file:// url, it is assumed the document must be read, and no cached value used.
@@ -244,8 +258,8 @@ public:
     // The tiles parameter is an invalidatetiles: message as sent by the child process
     void invalidateTiles(const std::string& tiles, int normalizedViewId);
 
-    /// Parse invalidateTiles message to a part number and a rectangle of the invalidated area
-    static std::pair<PartModePair, Util::Rectangle> parseInvalidateMsg(const std::string& tiles);
+    /// Parse invalidateTiles message to rectangle and associated attributes of the invalidated area
+    static Util::Rectangle parseInvalidateMsg(const std::string& tiles, int &part, int &mode, TileWireId &wid);
 
     /// Forget the tile being rendered if it is the latest version we expect.
     void forgetTileBeingRendered(const TileDesc& descForKitReply,

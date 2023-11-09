@@ -22,14 +22,12 @@ class DeltaTests : public CPPUNIT_NS::TestFixture
 {
     CPPUNIT_TEST_SUITE(DeltaTests);
 
-#if ENABLE_DELTAS
     CPPUNIT_TEST(testRle);
     CPPUNIT_TEST(testRleComplex);
     CPPUNIT_TEST(testRleIdentical);
     CPPUNIT_TEST(testDeltaSequence);
     CPPUNIT_TEST(testRandomDeltas);
     CPPUNIT_TEST(testDeltaCopyOutOfBounds);
-#endif
 
     CPPUNIT_TEST_SUITE_END();
 
@@ -271,7 +269,7 @@ void DeltaTests::testRle()
     DeltaGenerator::DeltaBitmapRow rowb;
     const uint32_t data[] = { 42, 42, 42, 42, 0, 0, 0, 1, 2, 3, 4,
         7, 7, 7, 1, 2, 3, 3, 2, 1, 0, 9, 9, 9, 9, 9, 0, 9, 0, 9, 0, 9 };
-    const uint32_t elems = sizeof(data)/sizeof(data[0]);
+    const uint32_t elems = N_ELEMENTS(data);
     rowa.initRow(data, elems);
     rowb.initRow(data, elems);
     LOK_ASSERT(rowa.identical(rowb));
@@ -281,6 +279,18 @@ void DeltaTests::testRle()
     {
         LOK_ASSERT_EQUAL(data[i], it.getPixel());
         it.next();
+    }
+
+    const uint32_t empty[256] = { 0, };
+    DeltaGenerator::DeltaBitmapRow rowc;
+    rowc.initRow(empty, 256);
+    LOK_ASSERT(!rowa.identical(rowc));
+    LOK_ASSERT(!rowb.identical(rowc));
+    DeltaGenerator::DeltaBitmapRow::PixIterator it2(rowc);
+    for (uint32_t i = 0; i < 256; ++i)
+    {
+        LOK_ASSERT_EQUAL(empty[i], it2.getPixel());
+        it2.next();
     }
 }
 
@@ -399,14 +409,14 @@ void DeltaTests::testDeltaSequence()
     LOK_ASSERT(gen.createDelta(
                        reinterpret_cast<unsigned char *>(&text[0]),
                        0, 0, width, height, width, height,
-                       TileLocation(1, 2, 3, 0, 1), delta, textWid, false) == false);
+                       TileLocation(1, 2, 3, 0, 1), delta, textWid, false, LOK_TILEMODE_RGBA) == false);
     LOK_ASSERT(delta.empty());
 
     // Build a delta between text2 & textWid
     LOK_ASSERT(gen.createDelta(
                        reinterpret_cast<unsigned char *>(&text2[0]),
                        0, 0, width, height, width, height,
-                       TileLocation(1, 2, 3, 0, 1), delta, text2Wid, false) == true);
+                       TileLocation(1, 2, 3, 0, 1), delta, text2Wid, false, LOK_TILEMODE_RGBA) == true);
     LOK_ASSERT(delta.size() > 0);
     checkzDelta(delta, "text2 to textWid");
 
@@ -419,7 +429,7 @@ void DeltaTests::testDeltaSequence()
     LOK_ASSERT(gen.createDelta(
                        reinterpret_cast<unsigned char *>(&text[0]),
                        0, 0, width, height, width, height,
-                       TileLocation(1, 2, 3, 0, 1), two2one, textWid, false) == true);
+                       TileLocation(1, 2, 3, 0, 1), two2one, textWid, false, LOK_TILEMODE_RGBA) == true);
     LOK_ASSERT(two2one.size() > 0);
     checkzDelta(two2one, "text to text2Wid");
 
@@ -458,14 +468,14 @@ void DeltaTests::testDeltaCopyOutOfBounds()
     LOK_ASSERT(gen.createDelta(
                        reinterpret_cast<unsigned char *>(&text[0]),
                        0, 0, width, height, width, height,
-                       TileLocation(1, 2, 3, 0, 1), delta, textWid, false) == false);
+                       TileLocation(1, 2, 3, 0, 1), delta, textWid, false, LOK_TILEMODE_RGBA) == false);
     LOK_ASSERT(delta.empty());
 
     // Build a delta between the two frames
     LOK_ASSERT(gen.createDelta(
                        reinterpret_cast<unsigned char *>(&text2[0]),
                        0, 0, width, height, width, height,
-                       TileLocation(1, 2, 3, 0, 1), delta, text2Wid, false) == true);
+                       TileLocation(1, 2, 3, 0, 1), delta, text2Wid, false, LOK_TILEMODE_RGBA) == true);
     LOK_ASSERT(delta.size() > 0);
     checkzDelta(delta, "copy out of bounds");
 

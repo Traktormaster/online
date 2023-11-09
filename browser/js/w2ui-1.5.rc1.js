@@ -2529,7 +2529,7 @@ w2utils.event = {
             if (typeof options.onRender === 'function' && typeof options.render !== 'function') options.render = options.onRender;
             // since only one overlay can exist at a time
             $.fn.w2menuClick = function (event, index) {
-                var keepOpen = options.keepOpen || false;
+				var keepOpen = options.keepOpen || false;
                 if (['radio', 'check'].indexOf(options.type) != -1) {
                     if (event.shiftKey || event.metaKey || event.ctrlKey) keepOpen = true;
                 }
@@ -2554,7 +2554,19 @@ w2utils.event = {
                 }
             };
             $.fn.w2menuDown = function (event, index) {
-                var $el  = $(event.target).parents('tr');
+                if (event.type === 'keydown') {
+					if (event.code === 'ArrowDown')
+						document.activeElement.nextElementSibling.focus();
+					else if (event.code === 'ArrowUp')
+						document.activeElement.previousElementSibling.focus();
+
+					if (event.code === 'Enter' || event.code === 'Space') {
+						document.activeElement.click();
+						return;
+					}
+				}
+
+				var $el  = $(event.target).parents('tr');
                 var tmp  = $el.find('.w2ui-icon');
                 if ((options.type == 'check') || (options.type == 'radio')) {
                    var item = options.items[index];
@@ -2733,7 +2745,10 @@ w2utils.event = {
                         menu_html +=
                             '<tr index="'+ f + '" style="'+ (mitem.style ? mitem.style : '') +'" '+ (mitem.tooltip ? 'title="'+ w2utils.lang(mitem.tooltip) +'"' : '') +
                             '        class="'+ bg +' '+ (options.index === f ? 'w2ui-selected' : '') + ' ' + (mitem.disabled === true ? 'w2ui-disabled' : '') +'"'+
+							'        tabIndex=0' +
                             '        onmousedown="if ('+ (mitem.disabled === true ? 'true' : 'false') + ') return;'+
+                            '               jQuery.fn.w2menuDown(event, \''+ f +'\');"'+
+                            '        onkeydown="if ('+ (mitem.disabled === true ? 'true' : 'false') + ') return;'+
                             '               jQuery.fn.w2menuDown(event, \''+ f +'\');"'+
                             '        onclick="event.stopPropagation(); '+
                             '               if ('+ (mitem.disabled === true ? 'true' : 'false') + ') return;'+
@@ -2761,36 +2776,35 @@ w2utils.event = {
         }
     };
 
-    $.fn.w2color = function (options, callBack) {
-        var el    = $(this)[0];
-        var index = [-1, -1];
-        if ($.fn.w2colorPalette == null) {
-            $.fn.w2colorPalette = [
-                ['000000', '555555', '888888', 'BBBBBB', 'DDDDDD', 'EEEEEE', 'F7F7F7', 'FFFFFF'],
-                ['FF011B', 'FF9838', 'FFFD59', '01FD55', '00FFFE', '006CE7', '9B24F4', 'FF21F5'],
-                ['FFEAEA', 'FCEFE1', 'FCF5E1', 'EBF7E7', 'E9F3F5', 'ECF4FC', 'EAE6F4', 'F5E7ED'],
-                ['F4CCCC', 'FCE5CD', 'FFF2CC', 'D9EAD3', 'D0E0E3', 'CFE2F3', 'D9D1E9', 'EAD1DC'],
-                ['EA9899', 'F9CB9C', 'FEE599', 'B6D7A8', 'A2C4C9', '9FC5E8', 'B4A7D6', 'D5A6BD'],
-                ['E06666', 'F6B26B', 'FED966', '93C47D', '76A5AF', '6FA8DC', '8E7CC3', 'C27BA0'],
-                ['CC0814', 'E69138', 'F1C232', '6AA84F', '45818E', '3D85C6', '674EA7', 'A54D79'],
-                ['99050C', 'B45F17', 'BF901F', '37761D', '124F5C', '0A5394', '351C75', '741B47'],
-                // ['660205', '783F0B', '7F6011', '274E12', '0C343D', '063762', '20124D', '4C1030'],
-            ];
-            var customColorRow = localStorage.customColor;
-            var recentRow = localStorage.recentColor;
-
-            if (typeof customColorRow !== 'undefined') {
-                $.fn.w2colorPalette.push(JSON.parse(customColorRow));
-            } else {
-                $.fn.w2colorPalette.push(['F2F2F2', 'F2F2F2', 'F2F2F2', 'F2F2F2', 'F2F2F2']);  // custom colors (up to 4)
+    var toW2Palette = function (corePalette) {
+        var pal = [];
+        for (var i = 0; i < corePalette.length; i++) {
+            var row = [];
+            for (var j = 0; j < corePalette[i].length; j++) {
+                row.push(corePalette[i][j].Value);
             }
-
-            if (typeof recentRow !== 'undefined') {
-                $.fn.w2colorPalette.push(JSON.parse(recentRow));
-            } else {
-                $.fn.w2colorPalette.push(['F2F2F2', 'F2F2F2', 'F2F2F2', 'F2F2F2', 'F2F2F2', 'F2F2F2', 'F2F2F2', 'F2F2F2']); // recent colors (up to 8)
-            }
+            pal.push(row);
         }
+        return pal;
+    };
+
+    var generatePalette = function (paletteName, options) {
+        $.fn.w2colorPalette = toW2Palette(window.app.colorPalettes[paletteName].colors);
+        var customColorRow = localStorage.customColor;
+        var recentRow = localStorage.recentColor;
+
+        if (typeof customColorRow !== 'undefined') {
+            $.fn.w2colorPalette.push(JSON.parse(customColorRow));
+        } else {
+            $.fn.w2colorPalette.push(['F2F2F2', 'F2F2F2', 'F2F2F2', 'F2F2F2', 'F2F2F2']);  // custom colors (up to 4)
+        }
+
+        if (typeof recentRow !== 'undefined') {
+            $.fn.w2colorPalette.push(JSON.parse(recentRow));
+        } else {
+            $.fn.w2colorPalette.push(['F2F2F2', 'F2F2F2', 'F2F2F2', 'F2F2F2', 'F2F2F2', 'F2F2F2', 'F2F2F2', 'F2F2F2']); // recent colors (up to 8)
+        }
+
         var pal = $.fn.w2colorPalette;
         if (typeof options == 'string') options = {
             color: options,
@@ -2805,65 +2819,118 @@ w2utils.event = {
             pal[0].splice(1, 0, '555555');
             pal[0].pop();
         }
+
+        return pal;
+    };
+
+    $.fn.w2color = function (options, callBack) {
+        var el    = $(this)[0];
+        var index = [-1, -1];
+
+        function bindEvents(pal) {
+            $('#w2ui-overlay .color')
+                .off('.w2color')
+                .on('mousedown.w2color keydown.w2color', function (event) {
+					if (event.type === 'keydown') {
+						if (event.code !== 'Enter' && event.code !== 'Space')
+							return; // Handle keydown but only for specific keys.
+					}
+
+                    var color = $(event.originalEvent.target).attr('name');
+                    index = $(event.originalEvent.target).attr('index').split(':');
+                    var theme = $(event.originalEvent.target).attr('theme');
+                    $(el).data('_color', color);
+                    $(el).data('_theme', theme);
+                    var recentRow = $.fn.w2colorPalette[pal.length - 1];
+                    if (recentRow.indexOf(color) !== -1) {
+                        recentRow.splice(recentRow.indexOf(color), 1);
+                    }
+                    recentRow.unshift(color);
+                    localStorage.setItem('recentColor', JSON.stringify(recentRow));
+                })
+                .on('mouseup.w2color keyup.w2color', function (event) {
+                    setTimeout(function () {
+						if (event.type === 'keyup') {
+							if (event.code !== 'Enter' && event.code !== 'Space')
+								return; // Handle keydown but only for specific keys.
+						}
+
+                        if ($("#w2ui-overlay").length > 0) $('#w2ui-overlay').removeData('keepOpen')[0].hide();
+
+						if (event.type === 'keyup') {
+							if (event.code === 'Enter' || event.code === 'Space')
+								app.map.focus(); // Focus back to document.
+						}
+                    }, 10);
+                });
+            $('#w2ui-overlay input')
+                .off('.w2color')
+                .on('mousedown.w2color', function (event) {
+                    $('#w2ui-overlay').data('keepOpen', true);
+                    setTimeout(function () { $('#w2ui-overlay').data('keepOpen', true); }, 10);
+                    event.stopPropagation();
+                })
+                .on('keyup.w2color', function (event) {
+                    if (this.value !== '' && this.value[0] !== '#') this.value = '#' + this.value;
+                })
+                .on('change.w2color', function (event) {
+                    var tmp = this.value;
+                    if (tmp.substr(0, 1) == '#') tmp = tmp.substr(1);
+                    if (tmp.length != 6) {
+                        $(this).w2tag('Invalid color.');
+                        return;
+                    }
+                    var customColorRow = $.fn.w2colorPalette[pal.length - 2];
+                    if (customColorRow.indexOf(tmp) !== -1) {
+                        customColorRow.splice(customColorRow.indexOf(tmp), 1);
+                    }
+                    customColorRow.unshift(tmp.toUpperCase());
+                    localStorage.setItem('customColor', JSON.stringify(customColorRow));
+                    $(el).w2color(options, callBack);
+                    setTimeout(function() { $('#w2ui-overlay input')[0].focus(); }, 100);
+                })
+                .w2field('hex');
+        }
+
+        var currentPalette = (localStorage && localStorage.colorPalette) ? localStorage.colorPalette : 'StandardColors';
+
+        var pal = generatePalette(currentPalette, options);
+
         if (options.color) options.color = String(options.color).toUpperCase();
 
         if ($('#w2ui-overlay').length === 0) {
-            $(el).w2overlay(getColorHTML(options), {
+            $(el).w2overlay(getColorHTML(pal, options), {
                 onHide: function () {
-                    if (typeof callBack == 'function') callBack($(el).data('_color'));
+                    var data = $(el).data('_color');
+                    var theme = $(el).data('_theme');
+                    if (typeof callBack == 'function')
+                        callBack(data, theme);
                     $(el).removeData('_color');
+                    $(el).removeData('_theme');
                 }
             });
         } else { // only refresh contents
-            $('#w2ui-overlay .w2ui-color').parent().html(getColorHTML(options));
+            $('#w2ui-overlay .w2ui-color').parent().html(getColorHTML(pal, options));
         }
 
-        // bind events
-        $('#w2ui-overlay .color')
-            .off('.w2color')
-            .on('mousedown.w2color', function (event) {
-                var color = $(event.originalEvent.target).attr('name');
-                index = $(event.originalEvent.target).attr('index').split(':');
-                $(el).data('_color', color);
-                var recentRow = $.fn.w2colorPalette[pal.length - 1];
-                if (recentRow.indexOf(color) !== -1) {
-                    recentRow.splice(recentRow.indexOf(color), 1);
-                }
-                recentRow.unshift(color);
-                localStorage.setItem('recentColor', JSON.stringify(recentRow));
-            })
-            .on('mouseup.w2color', function () {
-                setTimeout(function () {
-                    if ($("#w2ui-overlay").length > 0) $('#w2ui-overlay').removeData('keepOpen')[0].hide();
-                }, 10);
-            });
-        $('#w2ui-overlay input')
-            .off('.w2color')
-            .on('mousedown.w2color', function (event) {
-                $('#w2ui-overlay').data('keepOpen', true);
-                setTimeout(function () { $('#w2ui-overlay').data('keepOpen', true); }, 10);
-                event.stopPropagation();
-            })
-            .on('keyup.w2color', function (event) {
-                if (this.value !== '' && this.value[0] !== '#') this.value = '#' + this.value;
-            })
-            .on('change.w2color', function (event) {
-                var tmp = this.value;
-                if (tmp.substr(0, 1) == '#') tmp = tmp.substr(1);
-                if (tmp.length != 6) {
-                    $(this).w2tag('Invalid color.');
-                    return;
-                }
-                var customColorRow = $.fn.w2colorPalette[pal.length - 2];
-                if (customColorRow.indexOf(tmp) !== -1) {
-                    customColorRow.splice(customColorRow.indexOf(tmp), 1);
-                }
-                customColorRow.unshift(tmp.toUpperCase());
-                localStorage.setItem('customColor', JSON.stringify(customColorRow));
-                $(el).w2color(options, callBack);
-                setTimeout(function() { $('#w2ui-overlay input')[0].focus(); }, 100);
-            })
-            .w2field('hex');
+        bindEvents(pal);
+
+        var hasPaletteSelector = window.app.map._docLayer._docType === 'text';
+
+        if (hasPaletteSelector) {
+            var updatePalette = function () {
+                var palette = $('#w2ui-overlay .color-palette-selector option:selected').get(0).value;
+                localStorage.setItem('colorPalette', palette);
+                var pal = generatePalette(palette, options);
+                $('#w2ui-overlay .w2ui-color').parent().html(getColorHTML(pal, options));
+                bindEvents(pal);
+                $('#w2ui-overlay .color-palette-selector')
+                    .on('change', updatePalette);
+            };
+
+            $('#w2ui-overlay .color-palette-selector')
+                .on('change', updatePalette);
+        }
 
         el.nav = function (direction) {
             switch (direction) {
@@ -2890,15 +2957,31 @@ w2utils.event = {
             return color;
         };
 
-        function getColorHTML(options) {
-            var html  = '<div class="w2ui-color" onmousedown="event.stopPropagation(); event.preventDefault()">'+ // prevent default is needed otherwiser selection gets unselected
+        function getColorHTML(pal, options) {
+            var html = '';
+
+            var hasPaletteSelector = window.app.map._docLayer._docType === 'text';
+            var currentPalette = localStorage && localStorage.colorPalette ? localStorage.colorPalette : 'StandardColors';
+
+            if (hasPaletteSelector) {
+                html += '<select class="color-palette-selector">';
+                for (var i in window.app.colorPalettes)
+                    html += '<option value="' + i + '" ' + (i === currentPalette ? 'selected="selected"' : '') + '>' + window.app.colorPalettes[i].name + '</option>';
+                html += '</select>';
+            }
+
+            var detailedPalette = window.app.colorPalettes[currentPalette].colors
+
+            html += '<div class="w2ui-color" onmousedown="event.stopPropagation(); event.preventDefault()">'+ // prevent default is needed otherwiser selection gets unselected
                         '<table cellspacing="5"><tbody>';
             for (var i = 0; i < pal.length - 2; i++) {
                 html += '<tr>';
                 for (var j = 0; j < pal[i].length; j++) {
+                    var themeData = detailedPalette[i][j].Data ?
+                        JSON.stringify(detailedPalette[i][j].Data) : undefined;
                     html += '<td>'+
                             '    <div class="color '+ (pal[i][j] === '' ? 'no-color' : '') +'" style="background-color: #'+ pal[i][j] +';" ' +
-                            '       name="'+ pal[i][j] +'" index="'+ i + ':' + j +'">'+ (options.color == pal[i][j] ? '&#149;' : '&#160;') +
+                            '       name="'+ pal[i][j] +'"tabIndex=0 index="'+ i + ':' + j +'" ' + (themeData ? 'theme=\'' + themeData : '') + '\'>'+ (options.color == pal[i][j] ? '&#149;' : '&#160;') +
                             '    </div>'+
                             '</td>';
                     if (options.color == pal[i][j]) index = [i, j];
@@ -2911,22 +2994,22 @@ w2utils.event = {
             html += '<tr><td style="height: 8px" colspan="8"></td></tr>'+
                     '<tr>'+
                     '   <td colspan="4" style="text-align: left"><input placeholder="#FFF000" style="margin-left: 1px; width: 74px" maxlength="7"/></td>'+
-                    '   <td><div class="color" style="background-color: #'+ tmp1[0] +';" name="'+ tmp1[0] +'" index="8:0">'+ (options.color == tmp1[0] ? '&#149;' : '&#160;') +'</div></td>'+
-                    '   <td><div class="color" style="background-color: #'+ tmp1[1] +';" name="'+ tmp1[1] +'" index="8:0">'+ (options.color == tmp1[1] ? '&#149;' : '&#160;') +'</div></td>'+
-                    '   <td><div class="color" style="background-color: #'+ tmp1[2] +';" name="'+ tmp1[2] +'" index="8:0">'+ (options.color == tmp1[2] ? '&#149;' : '&#160;') +'</div></td>'+
-                    '   <td><div class="color" style="background-color: #'+ tmp1[3] +';" name="'+ tmp1[3] +'" index="8:0">'+ (options.color == tmp1[3] ? '&#149;' : '&#160;') +'</div></td>'+
+                    '   <td><div class="color" tabIndex=0 style="background-color: #'+ tmp1[0] +';" name="'+ tmp1[0] +'" index="8:0">'+ (options.color == tmp1[0] ? '&#149;' : '&#160;') +'</div></td>'+
+                    '   <td><div class="color" tabIndex=0 style="background-color: #'+ tmp1[1] +';" name="'+ tmp1[1] +'" index="8:0">'+ (options.color == tmp1[1] ? '&#149;' : '&#160;') +'</div></td>'+
+                    '   <td><div class="color" tabIndex=0 style="background-color: #'+ tmp1[2] +';" name="'+ tmp1[2] +'" index="8:0">'+ (options.color == tmp1[2] ? '&#149;' : '&#160;') +'</div></td>'+
+                    '   <td><div class="color" tabIndex=0 style="background-color: #'+ tmp1[3] +';" name="'+ tmp1[3] +'" index="8:0">'+ (options.color == tmp1[3] ? '&#149;' : '&#160;') +'</div></td>'+
                     '</tr>'+
                     '<tr><td style="height: 4px" colspan="8"></td></tr>' +
                     '<tr><td style="text-align: left;" colspan="8"><span style="margin-left: 1px;">' + _('Recent') + '</span></td></tr>' +
                     '<tr>'+
-                    '   <td><div class="color" style="background-color: #'+ tmp2[0] +';" name="'+ tmp2[0] +'" index="8:0">'+ (options.color == tmp2[0] ? '&#149;' : '&#160;') +'</div></td>'+
-                    '   <td><div class="color" style="background-color: #'+ tmp2[1] +';" name="'+ tmp2[1] +'" index="8:0">'+ (options.color == tmp2[1] ? '&#149;' : '&#160;') +'</div></td>'+
-                    '   <td><div class="color" style="background-color: #'+ tmp2[2] +';" name="'+ tmp2[2] +'" index="8:0">'+ (options.color == tmp2[2] ? '&#149;' : '&#160;') +'</div></td>'+
-                    '   <td><div class="color" style="background-color: #'+ tmp2[3] +';" name="'+ tmp2[3] +'" index="8:0">'+ (options.color == tmp2[3] ? '&#149;' : '&#160;') +'</div></td>'+
-                    '   <td><div class="color" style="background-color: #'+ tmp2[4] +';" name="'+ tmp2[4] +'" index="8:0">'+ (options.color == tmp2[4] ? '&#149;' : '&#160;') +'</div></td>'+
-                    '   <td><div class="color" style="background-color: #'+ tmp2[5] +';" name="'+ tmp2[5] +'" index="8:0">'+ (options.color == tmp2[5] ? '&#149;' : '&#160;') +'</div></td>'+
-                    '   <td><div class="color" style="background-color: #'+ tmp2[6] +';" name="'+ tmp2[6] +'" index="8:0">'+ (options.color == tmp2[6] ? '&#149;' : '&#160;') +'</div></td>'+
-                    '   <td><div class="color" style="background-color: #'+ tmp2[7] +';" name="'+ tmp2[7] +'" index="8:0">'+ (options.color == tmp2[7] ? '&#149;' : '&#160;') +'</div></td>'+
+                    '   <td><div class="color" tabIndex=0 style="background-color: #'+ tmp2[0] +';" name="'+ tmp2[0] +'" index="8:0">'+ (options.color == tmp2[0] ? '&#149;' : '&#160;') +'</div></td>'+
+                    '   <td><div class="color" tabIndex=0 style="background-color: #'+ tmp2[1] +';" name="'+ tmp2[1] +'" index="8:0">'+ (options.color == tmp2[1] ? '&#149;' : '&#160;') +'</div></td>'+
+                    '   <td><div class="color" tabIndex=0 style="background-color: #'+ tmp2[2] +';" name="'+ tmp2[2] +'" index="8:0">'+ (options.color == tmp2[2] ? '&#149;' : '&#160;') +'</div></td>'+
+                    '   <td><div class="color" tabIndex=0 style="background-color: #'+ tmp2[3] +';" name="'+ tmp2[3] +'" index="8:0">'+ (options.color == tmp2[3] ? '&#149;' : '&#160;') +'</div></td>'+
+                    '   <td><div class="color" tabIndex=0 style="background-color: #'+ tmp2[4] +';" name="'+ tmp2[4] +'" index="8:0">'+ (options.color == tmp2[4] ? '&#149;' : '&#160;') +'</div></td>'+
+                    '   <td><div class="color" tabIndex=0 style="background-color: #'+ tmp2[5] +';" name="'+ tmp2[5] +'" index="8:0">'+ (options.color == tmp2[5] ? '&#149;' : '&#160;') +'</div></td>'+
+                    '   <td><div class="color" tabIndex=0 style="background-color: #'+ tmp2[6] +';" name="'+ tmp2[6] +'" index="8:0">'+ (options.color == tmp2[6] ? '&#149;' : '&#160;') +'</div></td>'+
+                    '   <td><div class="color" tabIndex=0 style="background-color: #'+ tmp2[7] +';" name="'+ tmp2[7] +'" index="8:0">'+ (options.color == tmp2[7] ? '&#149;' : '&#160;') +'</div></td>'+
                     '</tr>'+
                     '<tr><td style="height: 4px" colspan="8"></td></tr>';
             html += '</tbody></table></div>';
@@ -6002,9 +6085,9 @@ w2utils.event = {
                             }
                             if (['color', 'text-color'].indexOf(it.type) != -1) {
                                 if (it.transparent == null) it.transparent = true;
-                                $(el).w2color({ color: it.color, transparent: it.transparent }, function (color, index) {
+                                $(el).w2color({ color: it.color, transparent: it.transparent }, function (color, themeData) {
                                     if (color != null) {
-                                        obj.colorClick({ name: obj.name, item: it, color: color, originalEvent: event.originalEvent });
+                                        obj.colorClick({ name: obj.name, item: it, color: color, themeData: themeData, originalEvent: event.originalEvent });
                                     }
                                     hideDrop();
                                 });
@@ -6417,7 +6500,7 @@ w2utils.event = {
             if (event.item && !event.item.disabled) {
                 // event before
                 var edata = this.trigger({ phase: 'before', type: 'click', target: event.item.id, item: event.item,
-                    color: event.color, originalEvent: event.originalEvent });
+                    color: event.color, themeData: event.themeData, originalEvent: event.originalEvent });
                 if (edata.isCancelled === true) return;
 
                 // default behavior

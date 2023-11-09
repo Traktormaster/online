@@ -1,16 +1,23 @@
 /* -*- js-indent-level: 8 -*- */
 /*
- * L.Control.UIManager - initializes the UI elements like toolbars, menubar or ruler
-			 and allows to controll them (show/hide)
+ * Copyright the Collabora Online contributors.
+ *
+ * SPDX-License-Identifier: MPL-2.0
  */
 
-/* global app $ setupToolbar w2ui toolbarUpMobileItems _ Hammer */
+/*
+ * L.Control.UIManager - initializes the UI elements like toolbars, menubar or ruler
+ *			 and allows to controll them (show/hide)
+ */
+
+/* global app $ setupToolbar w2ui toolbarUpMobileItems _ Hammer JSDialog */
 L.Control.UIManager = L.Control.extend({
 	mobileWizard: null,
+	documentNameInput: null,
 	blockedUI: false,
 	busyPopupTimer: null,
 	customButtons: [], // added by WOPI InsertButton
-	modalIdPretext: 'modal-dialog-',
+	previousTheme: null,
 
 	onAdd: function (map) {
 		this.map = map;
@@ -65,7 +72,7 @@ L.Control.UIManager = L.Control.extend({
 	},
 
 	shouldUseNotebookbarMode: function() {
-		var forceCompact = this.getSavedStateOrDefault('CompactMode', null);
+		var forceCompact = this.getSavedStateOrDefault('compactMode', null);
 		return (window.userInterfaceMode === 'notebookbar' && forceCompact === null)
 			|| forceCompact === false;
 	},
@@ -102,52 +109,75 @@ L.Control.UIManager = L.Control.extend({
 		var selectedMode = this.getDarkModeState();
 		// swap them by invoking the appropriate load function and saving the state
 		if (selectedMode) {
+			this.previousTheme = 'Dark';
 			this.setSavedState('darkTheme',false);
 			this.loadLightMode();
-			var cmd = {
-				'NewTheme': { 'type': 'string', 'value': 'Light' }
-			};
-			app.socket.sendMessage('uno .uno:ChangeTheme ' + JSON.stringify(cmd));
+			this.activateDarkModeInCore(false);
 		}
 		else {
+			this.previousTheme = 'Light';
 			this.setSavedState('darkTheme',true);
 			this.loadDarkMode();
-			var cmd = {
-				'NewTheme': { 'type': 'string', 'value': 'Dark' }
-			};
-			app.socket.sendMessage('uno .uno:ChangeTheme ' + JSON.stringify(cmd));
+			this.activateDarkModeInCore(true);
 		}
-		if (this.getCurrentMode() === 'classic' || this.map.isReadOnlyMode()) {
-			this.refreshMenubar();
-			this.refreshToolbar();
-		}
-		else {
-			this.refreshNotebookbar();
-		}
-		this.refreshSidebar();
+		if (!window.mode.isMobile())
+			this.refreshAfterThemeChange();
+
+		this.map.fire('themechanged');
 	},
+
 	initDarkModeFromSettings: function() {
 		var selectedMode = this.getDarkModeState();
+
+		if (window.ThisIsTheAndroidApp) {
+			selectedMode = window.uiDefaults['darkTheme'] ?  window.uiDefaults['darkTheme'] : false;
+			this.setSavedState('darkTheme', selectedMode);
+		}
+
 		if (selectedMode) {
+			this.previousTheme = 'Dark';
 			this.loadDarkMode();
-			var cmd = {
-				'NewTheme': { 'type': 'string', 'value': 'Dark' }
-			};
-			app.socket.sendMessage('uno .uno:ChangeTheme ' + JSON.stringify(cmd));
 		}
 		else {
+			this.previousTheme = 'Light';
 			this.loadLightMode();
-			var cmd = {
-				'NewTheme': { 'type': 'string', 'value': 'Light' }
-			};
-			app.socket.sendMessage('uno .uno:ChangeTheme ' + JSON.stringify(cmd));
 		}
+		this.activateDarkModeInCore(selectedMode);
+	},
+
+	activateDarkModeInCore: function(activate) {
+		var cmd = { 'NewTheme': { 'type': 'string', 'value': '' } };
+		activate ? cmd.NewTheme.value = 'Dark' : cmd.NewTheme.value = 'Light';
+		app.socket.sendMessage('uno .uno:ChangeTheme ' + JSON.stringify(cmd));
+	},
+
+	renameDocument: function() {
+		// todo: does this need _('rename document)
+		var docNameInput = this.documentNameInput;
+		var fileName = this.map['wopi'].BaseFileName ? this.map['wopi'].BaseFileName : '';
+		this.showInputModal('rename-modal', _('Rename Document'), _('Enter new name'), fileName, _('Rename'),
+			function(newName) {
+				docNameInput.documentNameConfirm(newName);
+		});
+	},
+
+	getAccessibilityState: function() {
+		return window.isLocalStorageAllowed && window.localStorage.getItem('accessibilityState') === 'true';
+	},
+
+	toggleAccessibilityState: function() {
+		var savedA11yState = this.getAccessibilityState();
+		if (window.isLocalStorageAllowed)
+			window.localStorage.setItem('accessibilityState', !savedA11yState ? 'true' : 'false');
+		this.map.fire('a11ystatechanged');
+		this.map.setAccessibilityState(!savedA11yState);
 	},
 
 	initializeBasicUI: function() {
 		var enableNotebookbar = this.shouldUseNotebookbarMode();
 		var that = this;
 
+		this.map._accessibilityState = this.getAccessibilityState();
 
 		if (window.mode.isMobile() || !enableNotebookbar) {
 			var menubar = L.control.menubar();
@@ -182,7 +212,8 @@ L.Control.UIManager = L.Control.extend({
 
 		setupToolbar(this.map);
 
-		this.map.addControl(L.control.documentNameInput());
+		this.documentNameInput = L.control.documentNameInput();
+		this.map.addControl(this.documentNameInput);
 		this.map.addControl(L.control.alertDialog());
 		this.mobileWizard = L.control.mobileWizard();
 		this.map.addControl(this.mobileWizard);
@@ -262,6 +293,8 @@ L.Control.UIManager = L.Control.extend({
 		}
 
 		this.initDarkModeFromSettings();
+
+		this.map.fire('a11ystatechanged');
 
 		if (docType === 'spreadsheet') {
 			this.map.addControl(L.control.sheetsBar({shownavigation: isDesktop || window.mode.isTablet()}));
@@ -409,20 +442,35 @@ L.Control.UIManager = L.Control.extend({
 
 		this.notebookbar = notebookbar;
 		this.map.addControl(notebookbar);
+
+		app.UI.notebookbarAccessibility.initialize();
+	},
+
+	refreshAfterThemeChange: function() {
+		if (this.getCurrentMode() === 'classic' || this.map.isReadOnlyMode()) {
+			this.refreshMenubar();
+			this.refreshToolbar();
+		}
+		// jsdialog components like notebookbar or sidebar
+		// doesn't require reload to change icons
 	},
 
 	refreshNotebookbar: function() {
-		this.removeNotebookbarUI();
-		this.createNotebookbarControl(this.map.getDocType());
-		this.makeSpaceForNotebookbar();
-		this.notebookbar._showNotebookbar = true;
-		this.notebookbar.showTabs();
-		$('.main-nav').removeClass('readonly');
-		$('#map').addClass('notebookbar-opened');
-		this.insertCustomButtons();
-		this.map.sendInitUNOCommands();
-		if (this.map.getDocType() === 'presentation')
-			this.map.fire('toggleslidehide');
+			var selectedTab = $('.ui-tab.notebookbar[aria-selected="true"]').attr('id') || 'Home-tab-label';
+			this.removeNotebookbarUI();
+			this.createNotebookbarControl(this.map.getDocType());
+			if (this._map._permission === 'edit') {
+				$('.main-nav').removeClass('readonly');
+			}
+			$('#' + selectedTab).click();
+			this.makeSpaceForNotebookbar();
+			this.notebookbar._showNotebookbar = true;
+			this.notebookbar.showTabs();
+			$('#map').addClass('notebookbar-opened');
+			this.insertCustomButtons();
+			this.map.sendInitUNOCommands();
+			if (this.map.getDocType() === 'presentation')
+				this.map.fire('toggleslidehide');
 	},
 
 	refreshMenubar: function() {
@@ -494,7 +542,7 @@ L.Control.UIManager = L.Control.extend({
 			break;
 		}
 
-		this.setSavedState('CompactMode', uiMode.mode === 'classic');
+		this.setSavedState('compactMode', uiMode.mode === 'classic');
 		this.initializeSidebar();
 		this.insertCustomButtons();
 
@@ -508,12 +556,13 @@ L.Control.UIManager = L.Control.extend({
 		this.map.fire('darkmodechanged');
 		this.map.fire('rulerchanged');
 		this.map.fire('statusbarchanged');
+		this.map.fire('a11ystatechanged');
 	},
 
 	// UI modification
 
 	insertButtonToClassicToolbar: function(button) {
-		if (!w2ui['editbar'].get(button.id)) {
+		if (w2ui['editbar'] && !w2ui['editbar'].get(button.id)) {
 			if (this.map.isEditMode()) {
 				// add the css rule for the image
 				var style = $('html > head > style');
@@ -566,6 +615,9 @@ L.Control.UIManager = L.Control.extend({
 
 	// insert custom button to the current UI
 	insertCustomButton: function(button) {
+		if (button.tablet === false && window.mode.isTablet()) {
+			return;
+		}
 		if (!this.notebookbar)
 			this.insertButtonToClassicToolbar(button);
 		else
@@ -619,7 +671,7 @@ L.Control.UIManager = L.Control.extend({
 		var obj = $('.unfold');
 		obj.removeClass('w2ui-icon unfold');
 		obj.addClass('w2ui-icon fold');
-
+		$('#tb_editbar_item_fold').prop('title', _('Hide Menu'));
 	},
 
 	hideMenubar: function() {
@@ -633,7 +685,7 @@ L.Control.UIManager = L.Control.extend({
 		var obj = $('.fold');
 		obj.removeClass('w2ui-icon fold');
 		obj.addClass('w2ui-icon unfold');
-
+		$('#tb_editbar_item_fold').prop('title', _('Show Menu'));
 	},
 
 	isMenubarHidden: function() {
@@ -753,6 +805,11 @@ L.Control.UIManager = L.Control.extend({
 			this.showStatusBar();
 	},
 
+	focusSearch: function() {
+		this.showStatusBar();
+		document.getElementById('search-input').focus();
+	},
+
 	isStatusBarVisible: function() {
 		return $('#toolbar-down').is(':visible');
 	},
@@ -859,44 +916,78 @@ L.Control.UIManager = L.Control.extend({
 
 	// Snack bar
 
-	showSnackbar: function(label, action, callback) {
+	closeSnackbar: function() {
+		var closeMessage = { id: 'snackbar', jsontype: 'dialog', type: 'snackbar', action: 'close' };
+		app.socket._onMessage({ textMsg: 'jsdialog: ' + JSON.stringify(closeMessage) });
+	},
+
+	showSnackbar: function(label, action, callback, timeout, hasProgress) {
 		if (!app.socket)
 			return;
 
-		var closeJson = {
-			id: 'snackbar',
-			jsontype: 'dialog',
-			type: 'snackbar',
-			action: 'fadeout'
-		};
+		this.closeSnackbar();
 
-		app.socket._onMessage({textMsg: 'jsdialog: ' + JSON.stringify(closeJson)});
+		var buttonId = 'button';
+		var labelId = 'label';
 
 		var json = {
 			id: 'snackbar',
 			jsontype: 'dialog',
 			type: 'snackbar',
+			timeout: timeout,
+			'init_focus_id': action ? buttonId : undefined,
 			children: [
 				{
+					id: hasProgress ? 'snackbar-container-progress' : 'snackbar-container',
 					type: 'container',
 					children: [
-						action ? {id: 'label', type: 'fixedtext', text: label} : {id: 'label-no-action', type: 'fixedtext', text: label},
-						action ? {id: 'button', type: 'pushbutton', text: action} : {}
+						action ? {id: labelId, type: 'fixedtext', text: label, labelFor: buttonId} : {id: 'label-no-action', type: 'fixedtext', text: label},
+						hasProgress ? {id: 'progress', type: 'progressbar', value: 0, maxValue: 100} : {},
+						action ? {id: buttonId, type: 'pushbutton', text: action, labelledBy: labelId} : {}
 					]
 				}
 			]
 		};
 
+		var that = this;
 		var builderCallback = function(objectType, eventType, object, data) {
 			window.app.console.debug('control: \'' + objectType + '\' id:\'' + object.id + '\' event: \'' + eventType + '\' state: \'' + data + '\'');
 
-			if (object.id === 'button' && objectType === 'pushbutton' && eventType === 'click') {
+			if (object.id === buttonId && objectType === 'pushbutton' && eventType === 'click') {
 				if (callback)
 					callback();
+
+				that.closeSnackbar();
 			}
 		};
 
 		app.socket._onMessage({textMsg: 'jsdialog: ' + JSON.stringify(json), callback: builderCallback});
+	},
+
+	/// shows snackbar with progress
+	showProgressBar: function(message, buttonText, callback, timeout) {
+		this.showSnackbar(message, buttonText, callback, timeout ? timeout : -1, true);
+	},
+
+	/// sets progressbar status, value should be in range 0-100
+	setSnackbarProgress: function(value) {
+		if (!app.socket)
+			return;
+
+		var json = {
+			id: 'snackbar',
+			jsontype: 'dialog',
+			type: 'snackbar',
+			action: 'update',
+			control: {
+				id: 'progress',
+				type: 'progressbar',
+				value: value,
+				maxValue: 100
+			}
+		};
+
+		app.socket._onMessage({textMsg: 'jsdialog: ' + JSON.stringify(json)});
 	},
 
 	// Modals
@@ -943,9 +1034,9 @@ L.Control.UIManager = L.Control.extend({
 			return this.mobileWizard.isOpen();
 	},
 
-	/// Returns generated (or to be generated) id for the modal container.
+	// TODO: remove and use JSDialog.generateModalId directly
 	generateModalId: function(givenId) {
-		return this.modalIdPretext + givenId;
+		return JSDialog.generateModalId(givenId);
 	},
 
 	_modalDialogJSON: function(id, title, cancellable, widgets, focusId) {
@@ -1029,11 +1120,107 @@ L.Control.UIManager = L.Control.extend({
 		var that = this;
 		this.showModal(json, [
 			{id: responseButtonId, func: function() {
+				var dontClose = false;
 				if (typeof callback === 'function')
-					callback();
-				that.closeModal(dialogId);
+					dontClose = callback();
+				if (!dontClose)
+					that.closeModal(dialogId);
 			}}
 		], cancelButtonId);
+		if (!buttonText && !withCancel) {
+			// if no buttons better to set tabIndex to negative so the element is not reachable via sequential keyboard navigation but can be focused programatically
+			document.getElementById(dialogId).tabIndex = -1;
+			// We hid the OK button, we need to set focus manually on the popup.
+			document.getElementById(dialogId).focus();
+			document.getElementById(dialogId).className += ' focus-hidden';
+		}
+	},
+
+	/// shows modal dialog with progress
+	showProgressBarDialog: function(id, title, message, buttonText, callback, value, cancelCallback) {
+		var dialogId = this.generateModalId(id);
+		var responseButtonId = id + '-response';
+		var cancelButtonId = id + '-cancel';
+
+		var json = this._modalDialogJSON(id, title, true, [
+			{
+				id: 'info-modal-tile-m',
+				type: 'fixedtext',
+				text: title,
+				hidden: !window.mode.isMobile()
+			},
+			{
+				id: 'info-modal-label1',
+				type: 'fixedtext',
+				text: message
+			},
+			{
+				id: dialogId + '-progressbar',
+				type: 'progressbar',
+				value: (value !== undefined && value !== null ? value: 0),
+				maxValue: 100
+			},
+			{
+				id: '',
+				type: 'buttonbox',
+				text: '',
+				enabled: true,
+				children: [
+					{
+						id: cancelButtonId,
+						type: 'pushbutton',
+						text: _('Cancel')
+					},
+					{
+						id: responseButtonId,
+						type: 'pushbutton',
+						text: buttonText,
+						'has_default': true,
+						hidden: buttonText ? false: true // Hide if no text is given. So we can use one modal type for various purposes.
+					}
+				],
+				vertical: false,
+				layoutstyle: 'end'
+			},
+		], buttonText ? responseButtonId : cancelButtonId);
+
+		var that = this;
+		this.showModal(json, [
+			{id: responseButtonId, func: function() {
+				var dontClose = false;
+				if (typeof callback === 'function')
+					dontClose = callback();
+				if (!dontClose)
+					that.closeModal(dialogId);
+			}},
+			{id: cancelButtonId, func: function() {
+				if (typeof cancelCallback === 'function')
+					cancelCallback();
+			}}
+		], cancelButtonId);
+	},
+
+	/// sets progressbar status, value should be in range 0-100
+	setDialogProgress: function(id, value) {
+		if (!app.socket)
+			return;
+
+		var dialogId = this.generateModalId(id);
+
+		var json = {
+			id: dialogId,
+			jsontype: 'dialog',
+			type: 'modalpopup',
+			action: 'update',
+			control: {
+				id: dialogId + '-progressbar',
+				type: 'progressbar',
+				value: value,
+				maxValue: 100
+			}
+		};
+
+		app.socket._onMessage({textMsg: 'jsdialog: ' + JSON.stringify(json)});
 	},
 
 	/// buttonObjectList: [{id: button's id, text: button's text, ..other properties if needed}, ...]
@@ -1301,15 +1488,15 @@ L.Control.UIManager = L.Control.extend({
 	},
 
 	setSavedState: function(name, state) {
-		var docType = (name === 'CompactMode') ? null : this.map.getDocType();
+		var docType = (name === 'compactMode') ? null : this.map.getDocType();
 		if (window.isLocalStorageAllowed)
 			localStorage.setItem('UIDefaults_' + docType + '_' + name, state);
 	},
 
 	getSavedStateOrDefault: function(name, forcedDefault) {
 		var retval = forcedDefault !== undefined ? forcedDefault : true;
-		// we request CompactMode very early, no info about doctype so unify all the calls
-		var docType = (name === 'CompactMode') ? null : this.map.getDocType();
+		// we request compactMode very early, no info about doctype so unify all the calls
+		var docType = (name === 'compactMode') ? null : this.map.getDocType();
 		var state = null;
 		if (window.isLocalStorageAllowed)
 			state = localStorage.getItem('UIDefaults_' + docType + '_' + name);

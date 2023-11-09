@@ -65,7 +65,7 @@ public:
         if (_scenario == Scenario::VerifyOverwrite)
         {
             // By default, we don't upload when verifying (unless always_save_on_exit is set).
-            setExpectedPutFile(SaveOnExit);
+            setExpectedPutFile(SaveOnExit ? 2 : 0);
         }
         else
         {
@@ -106,7 +106,7 @@ public:
         LOK_ASSERT_EQUAL_MESSAGE("Unexpected overwritting the document in storage", false, force);
 
         // Internal Server Error.
-        return Util::make_unique<http::Response>(http::StatusCode::InternalServerError);
+        return std::make_unique<http::Response>(http::StatusCode::InternalServerError);
     }
 
     bool onDocumentModified(const std::string& message) override

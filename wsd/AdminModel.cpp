@@ -26,9 +26,10 @@
 #include <fnmatch.h>
 #include <dirent.h>
 
-void Document::addView(const std::string& sessionId, const std::string& userName, const std::string& userId)
+void Document::addView(const std::string& sessionId, const std::string& userName,
+                       const std::string& userId, bool readOnly)
 {
-    const auto ret = _views.emplace(sessionId, View(sessionId, userName, userId));
+    const auto ret = _views.emplace(sessionId, View(sessionId, userName, userId, readOnly));
     if (!ret.second)
     {
         LOG_WRN("View with SessionID [" << sessionId << "] already exists.");
@@ -505,13 +506,14 @@ void AdminModel::uploadedAlert(const std::string& docKey, pid_t pid, bool value)
 void AdminModel::addDocument(const std::string& docKey, pid_t pid,
                              const std::string& filename, const std::string& sessionId,
                              const std::string& userName, const std::string& userId,
-                             const int smapsFD, const Poco::URI& wopiSrc)
+                             const int smapsFD, const Poco::URI& wopiSrc, bool isViewReadOnly)
 {
     ASSERT_CORRECT_THREAD_OWNER(_owner);
-    const auto ret = _documents.emplace(docKey, std::unique_ptr<Document>(new Document(docKey, pid, filename, wopiSrc)));
+    const auto ret =
+        _documents.emplace(docKey, std::make_unique<Document>(docKey, pid, filename, wopiSrc));
     ret.first->second->setProcSMapsFD(smapsFD);
     ret.first->second->takeSnapshot();
-    ret.first->second->addView(sessionId, userName, userId);
+    ret.first->second->addView(sessionId, userName, userId, isViewReadOnly);
     LOG_DBG("Added admin document [" << docKey << "].");
 
     std::string memoryAllocated;
@@ -550,8 +552,8 @@ void AdminModel::addDocument(const std::string& docKey, pid_t pid,
         memoryAllocated = std::to_string(_documents.begin()->second->getMemoryDirty());
     }
 
-    const std::string wopiHost = wopiSrc.getHost();
-    oss << memoryAllocated << ' ' << wopiHost;
+    const std::string& wopiHost = wopiSrc.getHost();
+    oss << memoryAllocated << ' ' << wopiHost << ' ' << isViewReadOnly << ' ' << wopiSrc.toString();
     if (COOLWSD::getConfigValue<bool>("logging.docstats", false))
     {
         std::string docstats = "docstats : adding a document : " + filename
@@ -566,13 +568,21 @@ void AdminModel::addDocument(const std::string& docKey, pid_t pid,
 
 void AdminModel::doRemove(std::map<std::string, std::unique_ptr<Document>>::iterator &docIt)
 {
-    std::ostringstream ostream;
-    ostream << "routing_rmdoc " << docIt->second->getWopiSrc();
-    notify(ostream.str());
+    std::string docItKey = docIt->first;
+    // don't send the routing_rmdoc if document is migrating
+    if (getCurrentMigDoc() != docItKey)
+    {
+        std::ostringstream ostream;
+        ostream << "routing_rmdoc " << docIt->second->getWopiSrc();
+        notify(ostream.str());
+    }
+    else
+    {
+        resetMigratingInfo();
+    }
 
     std::unique_ptr<Document> doc;
     std::swap(doc, docIt->second);
-    std::string docItKey = docIt->first;
     _documents.erase(docIt);
     _expiredDocuments.emplace(docItKey + std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                                             std::chrono::steady_clock::now().time_since_epoch()).count()),
@@ -784,13 +794,14 @@ std::string AdminModel::getDocuments() const
                 << "\"pid\"" << ':' << it.second->getPid() << ','
                 << "\"docKey\"" << ':' << '"' << it.second->getDocKey() << '"' << ','
                 << "\"fileName\"" << ':' << '"' << encodedFilename << '"' << ','
-                << "\"wopiHost\"" << ':' << '"' << it.second -> getHostName() << '"' << ','
+                << "\"wopiHost\"" << ':' << '"' << it.second->getHostName() << '"' << ','
                 << "\"activeViews\"" << ':' << it.second->getActiveViews() << ','
                 << "\"memory\"" << ':' << it.second->getMemoryDirty() << ','
                 << "\"elapsedTime\"" << ':' << it.second->getElapsedTime() << ','
                 << "\"idleTime\"" << ':' << it.second->getIdleTime() << ','
                 << "\"modified\"" << ':' << '"' << (it.second->getModifiedStatus() ? "Yes" : "No") << '"' << ','
                 << "\"uploaded\"" << ':' << '"' << (it.second->getUploadedStatus() ? "Yes" : "No") << '"' << ','
+                << "\"wopiSrc\"" << ':' << '"' << it.second->getWopiSrc() << '"' << ','
                 << "\"views\"" << ':' << '[';
             std::map<std::string, View> viewers = it.second->getViews();
             std::string separator;
@@ -800,7 +811,8 @@ std::string AdminModel::getDocuments() const
                     oss << separator << '{'
                         << "\"userName\"" << ':' << '"' << viewIt.second.getUserName() << '"' << ','
                         << "\"userId\"" << ':' << '"' << viewIt.second.getUserId() << '"' << ','
-                        << "\"sessionid\"" << ':' << '"' << viewIt.second.getSessionId() << '"' << '}';
+                        << "\"sessionid\"" << ':' << '"' << viewIt.second.getSessionId() << '"' << ','
+                        << "\"readonly\"" << ':' << '"' << viewIt.second.isReadOnly() << '"' << '}';
                         separator = ',';
                 }
             }
@@ -809,8 +821,8 @@ std::string AdminModel::getDocuments() const
             separator1 = ',';
         }
     }
-    oss << ']' << '}';
 
+    oss << ']' << '}';
     return oss.str();
 }
 
@@ -1222,6 +1234,108 @@ void AdminModel::notifyDocsMemDirtyChanged()
             it.second->setMemDirtyChanged(false);
         }
     }
+}
+
+bool AdminModel::isDocSaved(const std::string& docKey)
+{
+    auto doc = _documents.find(docKey);
+    if (doc != _documents.end())
+        return !doc->second->getModifiedStatus();
+    LOG_DBG("cannot find document with docKey " << docKey);
+    return false;
+}
+
+bool AdminModel::isDocReadOnly(const std::string& docKey)
+{
+    auto doc = _documents.find(docKey);
+    if (doc != _documents.end())
+    {
+        bool isReadOnly = true;
+        for (const auto& view : doc->second->getViews())
+        {
+            if (!view.second.isReadOnly())
+            {
+                isReadOnly = false;
+                break;
+            }
+        }
+        return isReadOnly;
+    }
+    LOG_DBG("cannot find document with docKey " << docKey);
+    return false;
+}
+
+void AdminModel::sendMigrateMsgAfterSave(bool lastSaveSuccessful, const std::string& docKey)
+{
+    if (getCurrentMigDoc() != docKey)
+    {
+        return;
+    }
+    std::ostringstream oss;
+    std::string saveSuccessful = lastSaveSuccessful ? "true" : "false";
+    oss << "migrate: {";
+    oss << "\"afterSave\""
+        << ":true,";
+    oss << "\"saved\":" << saveSuccessful << ',';
+    if (lastSaveSuccessful)
+    {
+        oss << "\"routeToken\"" << ':' << '"' << getCurrentMigToken() << '"' << ',';
+        oss << "\"serverId\"" << ':' << '"' << getTargetMigServerId() << '"' << '}';
+    }
+    else
+    {
+        resetMigratingInfo();
+    }
+    COOLWSD::alertUserInternal(docKey, oss.str());
+}
+
+std::string AdminModel::getWopiSrcMap()
+{
+    std::ostringstream oss;
+    oss << "wopiSrcMap: {";
+    oss << "\"routeToken\": \"" << COOLWSD::RouteToken << "\",";
+    oss << "\"wopiSrc\": [";
+    size_t count = 0;
+    for (const auto& it : _documents)
+    {
+        if (!it.second->isExpired())
+        {
+            oss << "\"" << it.second->getWopiSrc() << "\"";
+            if (count < _documents.size() - 1)
+            {
+                oss << ',';
+            }
+        }
+        count++;
+    }
+    oss << "]}";
+    return oss.str();
+}
+
+void AdminModel::setMigratingInfo(const std::string& docKey, const std::string& routeToken, const std::string& serverId)
+{
+    _currentMigDoc = docKey;
+    _currentMigToken = routeToken;
+    _targetMigServerId = serverId;
+}
+
+void AdminModel::resetMigratingInfo()
+{
+    _currentMigDoc = std::string();
+    _currentMigToken = std::string();
+    _targetMigServerId = std::string();
+}
+
+std::string AdminModel::getFilename(int pid)
+{
+    for (auto& it : _documents)
+    {
+        if (it.second->getPid() == pid)
+        {
+            return it.second->getFilename();
+        }
+    }
+    return std::string();
 }
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

@@ -90,6 +90,12 @@
             });
       }
 
+      function getExportFormats() {
+        post({'MessageId': 'Get_Export_Formats',
+              'Values': null
+            });
+      }
+
       function hide_commands(id) {
         post({'MessageId': 'Hide_Menu_Item',
               'Values': { 'id': id, }
@@ -131,6 +137,10 @@
         post({'MessageId': 'Host_PostmessageReady'});
         post({'MessageId': 'Action_ChangeUIMode',
               'Values': {'Mode': value}});
+      }
+
+      function Execute(messageId, values) {
+        post({'MessageId': messageId, 'Values': values});
       }
 
       function reset_access_token(accesstoken) {
@@ -265,6 +275,12 @@
                 });
             }
           }
+        } else if (msg.MessageId == 'Get_Export_Formats_Resp') {
+          if (msg.Values) {
+            alert(JSON.stringify(msg.Values));
+          } else {
+            alert('Response is empty');
+          }
         }
       }
 
@@ -311,6 +327,7 @@
       <button onclick="save(); return false;">Save</button>
       <button onclick="closeDocument(); return false;">Close</button></br></br>
       <button onclick="exportAsHtml(); return false;">Export as HTML</button></br></br>
+      <button onclick="getExportFormats(); return false;">Get export formats</button>
       <button onclick="hide_commands('save'); return false;">Hide Save Commands</button>
       <button onclick="show_commands('save'); return false;">Show Save Commands</button></br>
       <button onclick="hide_commands('print'); return false;">Hide Print Commands</button>
@@ -320,6 +337,18 @@
       <label for="new-access-token"><b>New Access-Token</b>: </label><br>
       <textarea name="new-access-token" id="new-access-token" value="" rows="1" cols="30">123456789AA</textarea><br>
       <button onclick="reset_access_token(document.getElementById('new-access-token').value); return false;">Reset Access-Token</button>
+    </form>
+
+    <h3>Send a message</h3>
+
+    <form>
+      <label for="execute-message"><b>Message</b>: </label><br>
+      <input type="text" name="execute-message" id="execute-message" /><br>
+      <label for="execute-param"><b>Values</b>: </label><br>
+      <p>This is the JSON format 'Values'.</p>
+      <textarea name="execute-param" id="execute-param">{}</textarea>
+      <br>
+      <button onclick="Execute(document.getElementById('execute-message').value, JSON.parse(document.getElementById('execute-param').value)); return false;">Execute</button>
     </form>
 
     <h3>Modified Status: <span id="ModifiedStatus">Saved</span></h3>

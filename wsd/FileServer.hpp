@@ -8,7 +8,9 @@
 #pragma once
 
 #include <string>
-#include "Socket.hpp"
+
+#include <HttpRequest.hpp>
+#include <Socket.hpp>
 
 #include <Poco/MemoryStream.h>
 #include <Poco/Util/LayeredConfiguration.h>
@@ -17,7 +19,7 @@ class RequestDetails;
 /// Handles file requests over HTTP(S).
 class FileServerRequestHandler
 {
-    friend class WhiteBoxTests; // for unit testing
+    friend class FileServeTests; // for unit testing
 
     static std::string getRequestPathname(const Poco::Net::HTTPRequest& request);
 
@@ -48,19 +50,17 @@ class FileServerRequestHandler
                                                bool defaultValue);
 
 public:
+    FileServerRequestHandler(const std::string& root);
+    ~FileServerRequestHandler();
+
     /// Evaluate if the cookie exists, and if not, ask for the credentials.
     static bool isAdminLoggedIn(const Poco::Net::HTTPRequest& request, Poco::Net::HTTPResponse& response);
+    static bool isAdminLoggedIn(const Poco::Net::HTTPRequest& request, http::Response& response);
 
     static void handleRequest(const Poco::Net::HTTPRequest& request,
                               const RequestDetails &requestDetails,
                               Poco::MemoryInputStream& message,
                               const std::shared_ptr<StreamSocket>& socket);
-
-    /// Read all files that we can serve into memory and compress them.
-    static void initialize();
-
-    /// Clean cached files.
-    static void uninitialize() { FileHash.clear(); }
 
     static void readDirToHash(const std::string &basePath, const std::string &path, const std::string &prefix = std::string());
 
@@ -70,9 +70,10 @@ public:
 
 private:
     static std::map<std::string, std::pair<std::string, std::string>> FileHash;
-    static void sendError(int errorCode, const Poco::Net::HTTPRequest& request,
-                          const std::shared_ptr<StreamSocket>& socket, const std::string& shortMessage,
-                          const std::string& longMessage, const std::string& extraHeader = "");
+    static void sendError(http::StatusCode errorCode, const Poco::Net::HTTPRequest& request,
+                          const std::shared_ptr<StreamSocket>& socket,
+                          const std::string& shortMessage, const std::string& longMessage,
+                          const std::string& extraHeader = std::string());
 };
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

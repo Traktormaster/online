@@ -12,6 +12,8 @@
 #include <string>
 
 #include <common/Util.hpp>
+#include <wsd/TileDesc.hpp>
+#include "Socket.hpp"
 
 #define LOK_USE_UNSTABLE_API
 #include <LibreOfficeKit/LibreOfficeKit.hxx>
@@ -20,7 +22,6 @@
 
 #include "ClientSession.hpp"
 #include "DocumentBroker.hpp"
-#include "Socket.hpp"
 
 #endif
 
@@ -133,6 +134,12 @@ private:
     bool _readOnly;
 };
 
+
+/// We have two types of password protected documents
+/// 1) Documents which require password to view
+/// 2) Document which require password to modify
+enum class DocumentPasswordType { ToView, ToModify };
+
 /// Check the ForkCounter, and if non-zero, fork more of them accordingly.
 /// @param limit If non-zero, set the ForkCounter to this limit.
 void forkLibreOfficeKit(const std::string& childRoot,
@@ -149,11 +156,20 @@ std::string anonymizeUsername(const std::string& username);
 /// Ensure there is no fatal system setup problem
 void consistencyCheckJail();
 
+/// Fetch the latest montonically incrementing wire-id
+TileWireId getCurrentWireId(bool increment = false);
+
 #ifdef __ANDROID__
 /// For the Android app, for now, we need access to the one and only document open to perform eg. saveAs() for printing.
 std::shared_ptr<lok::Document> getLOKDocumentForAndroidOnly();
 #endif
 
 extern _LibreOfficeKit* loKitPtr;
+
+/// Check if URP is enabled
+bool isURPEnabled();
+
+/// Start a URP connection, checking if URP is enabled and there is not already an active URP session
+bool startURP(std::shared_ptr<lok::Office> LOKit, void** ppURPContext);
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

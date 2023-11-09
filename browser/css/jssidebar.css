@@ -266,6 +266,13 @@ div.sidebar.ui-grid .checkbutton.sidebar,
 	column-gap: 5px;
 }
 
+/* Separators */
+.jsdialog.sidebar.ui-separator {
+	/* Hide separators for now.
+	 TODO: re-test and possibily enable them with different style*/
+	display: none;
+}
+
 button#button2.ui-pushbutton.jsdialog.sidebar {
 	width: 151px;
 	padding: 4px;
@@ -367,6 +374,10 @@ button#button2.ui-pushbutton.jsdialog.sidebar {
 #NavigatorDeck .ui-treeview-entry.selected {
 	background-color: var(--color-background-dark);
 	color: var(--color-primary);
+}
+[data-theme='dark'] #NavigatorDeck .ui-treeview-entry.selected {
+	background-color: transparent;
+	color: var(--color-text-lighter);
 }
 #NavigatorDeck .ui-treeview-entry.selected:not(.ui-listview-expandable-with-icon)::before {
 	content: '–';

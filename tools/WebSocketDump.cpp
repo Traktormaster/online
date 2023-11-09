@@ -100,14 +100,8 @@ private:
             request.read(message);
 
             LOG_INF('#' << socket->getFD() << ": Client HTTP Request: " << request.getMethod()
-                        << ' ' << request.getURI() << ' ' << request.getVersion() <<
-                    [&](auto& log)
-                    {
-                        for (const auto& it : request)
-                        {
-                            log << " / " << it.first << ": " << it.second;
-                        }
-                    });
+                        << ' ' << request.getURI() << ' ' << request.getVersion() << ' '
+                        << [&](auto& log) { Util::joinPair(log, request, " / "); });
 
             const std::streamsize contentLength = request.getContentLength();
             const auto offset = itBody - in.begin();
@@ -158,7 +152,7 @@ private:
         catch (const std::exception& exc)
         {
             // Bad request.
-            HttpHelper::sendErrorAndShutdown(400, socket);
+            HttpHelper::sendErrorAndShutdown(http::StatusCode::BadRequest, socket);
 
             // NOTE: Check _wsState to choose between HTTP response or WebSocket (app-level) error.
             LOG_INF('#' << socket->getFD() << " Exception while processing incoming request: [" <<
@@ -220,6 +214,7 @@ public:
         {}
 };
 
+// coverity[root_function] : don't warn about uncaught exceptions
 int main (int argc, char **argv)
 {
     (void) argc; (void) argv;

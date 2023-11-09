@@ -140,7 +140,7 @@ LibLODocument_Impl::LibLODocument_Impl()
 {
     if (!(m_pDocumentClass = gDocumentClass.lock()))
     {
-        m_pDocumentClass.reset(new LibreOfficeKitDocumentClass);
+        m_pDocumentClass = std::make_shared<LibreOfficeKitDocumentClass>();
 
         m_pDocumentClass->nSize = sizeof(LibreOfficeKitDocument);
 
@@ -357,7 +357,7 @@ static void doc_paintPartTile(LibreOfficeKitDocument* pThis,
 
 static int doc_getTileMode(LibreOfficeKitDocument* /*pThis*/)
 {
-    return LOK_TILEMODE_BGRA;
+    return LOK_TILEMODE_RGBA;
 }
 
 static void doc_getDocumentSize(LibreOfficeKitDocument* pThis,

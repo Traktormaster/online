@@ -126,6 +126,12 @@ L.Map = L.Evented.extend({
 		// True only when searching within the doc, as we need to use winId==0.
 		this._isSearching = false;
 
+		this._accessibilityState = false;
+
+		if (L.Browser.cypressTest && window.enableAccessibility && window.isLocalStorageAllowed) {
+			this._accessibilityState = true;
+			window.localStorage.setItem('accessibilityState', 'true');
+		}
 
 		this.callInitHooks();
 
@@ -242,8 +248,6 @@ L.Map = L.Evented.extend({
 		// after we receive status for the first time.
 		this._docLoadedOnce = false;
 
-		this._isNotebookbarLoadedOnCore = false;
-
 		this.on('commandstatechanged', function(e) {
 			if (e.commandName === '.uno:ModifiedStatus') {
 				this._everModified = this._everModified || (e.state === 'true');
@@ -274,7 +278,6 @@ L.Map = L.Evented.extend({
 		this.on('docloaded', function(e) {
 			this._docLoaded = e.status;
 			if (this._docLoaded) {
-				app.socket.sendMessage('blockingcommandstatus isRestrictedUser=' + this.Restriction.isRestrictedUser + ' isLockedUser=' + this.Locking.isLockedUser);
 				app.idleHandler.notifyActive();
 				if (!document.hasFocus()) {
 					this.fire('editorgotfocus');
@@ -305,11 +308,20 @@ L.Map = L.Evented.extend({
 				this._docLoadedOnce = this._docLoaded;
 			}
 		}, this);
+
+		this.fire('postMessage', {
+			msgId: 'App_LoadingStatus',
+			args: {
+				Status: 'Initialized',
+			}
+		});
 	},
 
 	initTextInput: function(docType) {
-		var hasAccessibilitySupport = window.enableAccessibility  === 'true';
-		this._textInput = hasAccessibilitySupport && docType === 'text' ? L.a11yTextInput() : L.textInput();
+		var hasAccessibilitySupport = window.enableAccessibility && this._accessibilityState;
+		hasAccessibilitySupport = hasAccessibilitySupport &&
+			(docType === 'text' || docType === 'presentation'|| docType === 'spreadsheet');
+		this._textInput = hasAccessibilitySupport ? L.a11yTextInput() : L.textInput();
 		this.addLayer(this._textInput);
 	},
 
@@ -322,7 +334,6 @@ L.Map = L.Evented.extend({
 	sendInitUNOCommands: function() {
 		// TODO: remove duplicated init code
 		app.socket.sendMessage('commandvalues command=.uno:LanguageStatus');
-		app.socket.sendMessage('commandvalues command=.uno:ViewAnnotations');
 		if (this._docLayer._docType === 'spreadsheet') {
 			this._docLayer._gotFirstCellCursor = false;
 			if (this._docLayer.options.sheetGeometryDataEnabled)
@@ -330,6 +341,9 @@ L.Map = L.Evented.extend({
 			this._docLayer.refreshViewData();
 			this._docLayer._update();
 		}
+		// For calc parsing this will need SheetGeometry, so send after
+		// requesting that
+		app.socket.sendMessage('commandvalues command=.uno:ViewAnnotations');
 		this._docLayer._getToolbarCommandsValues();
 	},
 
@@ -735,6 +749,7 @@ L.Map = L.Evented.extend({
 		    newCenter = this._limitCenter(center, this._zoom, bounds);
 
 		if (center.equals(newCenter)) { return this; }
+		if (this.distance(center, newCenter) < 0.0000001) { return this; }
 
 		return this.panTo(newCenter, options);
 	},

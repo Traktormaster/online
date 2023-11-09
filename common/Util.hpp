@@ -42,6 +42,8 @@
 
 #include <StringVector.hpp>
 
+#define STRINGIFY(X) #X
+
 #if CODE_COVERAGE
 extern "C"
 {
@@ -70,6 +72,13 @@ inline std::ostream& operator<<(std::ostream& os, const std::chrono::microsecond
 {
     os << ms.count() << "us";
     return os;
+}
+
+template <typename S, typename U, typename V>
+inline S& operator<<(S& stream, const std::pair<U, V>& pair)
+{
+    stream << pair.first << ": " << pair.second;
+    return stream;
 }
 
 namespace Util
@@ -280,7 +289,7 @@ namespace Util
     void getVersionInfo(std::string& version, std::string& hash);
 
     ///< A random hex string that identifies the current process.
-    std::string getProcessIdentifier();
+    const std::string& getProcessIdentifier();
 
     std::string getVersionJSON(bool enableExperimental);
 
@@ -1221,6 +1230,8 @@ int main(int argc, char**argv)
     //// Return current time in HTTP format.
     std::string getHttpTimeNow();
 
+    std::string getTimeNow(const char* format);
+
     //// Return time in HTTP format.
     std::string getHttpTime(std::chrono::system_clock::time_point time);
 
@@ -1323,7 +1334,7 @@ int main(int argc, char**argv)
      * Converts vector of strings to map. Strings should have formed like this: key + delimiter + value.
      * In case of a misformed string or zero length vector, passes that item and warns the developer.
      */
-    std::map<std::string, std::string> stringVectorToMap(std::vector<std::string> sVector, const char delimiter);
+    std::map<std::string, std::string> stringVectorToMap(const std::vector<std::string>& strvector, const char delimiter);
 
 #if !MOBILEAPP
     // If OS is not mobile, it must be Linux.
@@ -1428,15 +1439,25 @@ int main(int argc, char**argv)
         return std::string(s);
     }
 
-    /**
-     * Constructs an object of type T and wraps it in a std::unique_ptr.
-     *
-     * Can be replaced by std::make_unique when we allow C++14.
-     */
-    template<typename T, typename... Args>
-    typename std::unique_ptr<T> make_unique(Args&& ... args)
+    /// Concatenate the given elements in a container to each other using
+    /// the delimiter of choice.
+    template <typename T, typename U = const char*>
+    inline std::string join(const T& elements, const U& delimiter = ", ")
     {
-        return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
+        std::ostringstream oss;
+        bool first = true;
+        for (const auto& elem : elements)
+        {
+            if (!first)
+            {
+                oss << delimiter;
+            }
+
+            oss << elem;
+            first = false;
+        }
+
+        return oss.str();
     }
 
     /// Dump an object that supports .dumpState into a string.
@@ -1446,6 +1467,25 @@ int main(int argc, char**argv)
         std::ostringstream oss;
         object.dumpState(oss, indent);
         return oss.str().substr(indent.size());
+    }
+
+    /// Stringify elements from a container of pairs with a delimiter to a stream.
+    template <typename S, typename T>
+    void joinPair(S& stream, const T& container, const char* delimiter = " / ")
+    {
+        unsigned i = 0;
+        for (const auto& pair : container)
+        {
+            stream << (i++ ? delimiter : "") << pair;
+        }
+    }
+
+    /// Stringify elements from a container of pairs with a delimiter to string.
+    template <typename T> std::string joinPair(const T& container, const char* delimiter = " / ")
+    {
+        std::ostringstream oss;
+        joinPair(oss, container, delimiter);
+        return oss.str();
     }
 
     /// Asserts in the debug builds, otherwise just logs.
@@ -1468,7 +1508,14 @@ int main(int argc, char**argv)
     /// Close logs and forcefully exit with the given exit code.
     /// This calls std::_Exit, which terminates the program without cleaning up
     /// static instances (i.e. anything registered with `atexit' or `on_exit').
+    // coverity[+kill]
     void forcedExit(int code) __attribute__ ((__noreturn__));
+
+    // std::size isn't available on our android baseline so use this
+    // solution as a workaround
+    template <typename T, size_t S> char (&n_array_size( T(&)[S] ))[S];
+
+#define N_ELEMENTS(arr)     (sizeof(Util::n_array_size(arr)))
 
 } // end namespace Util
 

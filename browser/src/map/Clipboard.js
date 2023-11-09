@@ -207,8 +207,8 @@ L.Clipboard = L.Class.extend({
 			var request = window.newHttpRequester();
 
 			// avoid to invoke the following code if the download widget depends on user interaction
-			if (!that._downloadProgress || !that._downloadProgress.isVisible()) {
-				that._startProgress();
+			if (!that._downloadProgress || that._downloadProgress.isClosed()) {
+				that._startProgress(false);
 				that._downloadProgress.startProgressMode();
 			}
 			request.onload = function() {
@@ -231,6 +231,11 @@ L.Clipboard = L.Class.extend({
 				if (onErrorFn)
 					onErrorFn();
 				that._downloadProgress._onComplete();
+				that._downloadProgress._onClose();
+			};
+
+			request.ontimeout = function() {
+				that._map.uiManager.showSnackbar(_('warning: copy/paste request timed out'));
 				that._downloadProgress._onClose();
 			};
 
@@ -453,7 +458,7 @@ L.Clipboard = L.Class.extend({
 			window.app.console.log('Copy/Cut with complex/graphical selection');
 			if (this._selectionType === 'text' && this._selectionContent !== '')
 			{ // back here again having downloaded it ...
-				text = this._selectionContent;
+				text = this._selectionContent; // Not sure if we hit these lines. Last else block seems to catch the downloaded content (selection type is not "complex" while copying to clipboard).
 				window.app.console.log('Use downloaded selection.');
 			}
 			else
@@ -515,7 +520,9 @@ L.Clipboard = L.Class.extend({
 		if ($('.w2ui-input').is(':focus'))
 			return true;
 
-		if (this._map.uiManager.isAnyDialogOpen() && !this.isPasteSpecialDialogOpen())
+		if (this._map.uiManager.isAnyDialogOpen()
+			&& !this.isCopyPasteDialogReadyForCopy()
+			&& !this.isPasteSpecialDialogOpen())
 			return true;
 
 		if ($('.annotation-active').length && $('.cool-annotation-edit').is(':visible'))
@@ -766,7 +773,7 @@ L.Clipboard = L.Class.extend({
 	clearSelection: function() {
 		this._selectionContent = '';
 		this._selectionType = null;
-		this._scheduleHideDownload(15);
+		this._scheduleHideDownload();
 	},
 
 	// textselectioncontent: message
@@ -776,7 +783,7 @@ L.Clipboard = L.Class.extend({
 		if (L.Browser.cypressTest) {
 			this._dummyDiv.innerHTML = html;
 		}
-		this._scheduleHideDownload(15);
+		this._scheduleHideDownload();
 	},
 
 	// sets the selection to some (cell formula) text)
@@ -784,81 +791,53 @@ L.Clipboard = L.Class.extend({
 		this._selectionType = 'text';
 		this._selectionContent = this._originWrapBody(
 			'<body>' + text + '</body>');
-		this._scheduleHideDownload(15);
+		this._scheduleHideDownload();
 	},
 
 	// complexselection: message
 	onComplexSelection: function (/*text*/) {
 		// Mark this selection as complex.
 		this._selectionType = 'complex';
-		this._scheduleHideDownload(15);
+		this._scheduleHideDownload();
 	},
 
-	_startProgress: function() {
+	_startProgress: function(isLargeCopy) {
 		if (!this._downloadProgress) {
 			this._downloadProgress = L.control.downloadProgress();
+			this._map.addControl(this._downloadProgress);
 		}
-		if (!this._downloadProgress.isVisible()) {
-			this._downloadProgress.addTo(this._map);
-		}
-		this._downloadProgress.show();
+		this._downloadProgress.show(isLargeCopy);
 	},
 
 	_onDownloadOnLargeCopyPaste: function () {
-		if (!this._downloadProgress || this._downloadProgress.isClosed()) {
-			this._warnFirstLargeCopyPaste();
-			this._startProgress();
-		}
-		else if (this._downloadProgress.isStarted()) {
+		if (this._downloadProgress && this._downloadProgress.isStarted()) {
 			// Need to show this only when a download is really in progress and we block it.
 			// Otherwise, it's easier to flash the widget or something.
 			this._warnLargeCopyPasteAlreadyStarted();
+		} else {
+			this._startProgress(true);
 		}
 	},
 
 	_downloadProgressStatus: function() {
-		if (this._downloadProgress && this._downloadProgress.isVisible())
+		if (this._downloadProgress)
 			return this._downloadProgress.currentStatus();
 	},
 
 	// Download button is still shown after selection changed -> user has changed their mind...
-	_scheduleHideDownload: function(s) {
-		if (!this._downloadProgress || !this._downloadProgress.isVisible())
+	_scheduleHideDownload: function() {
+		if (!this._downloadProgress || this._downloadProgress.isClosed())
 			return;
 
-		// If no other copy/paste things occurred then ...
-		var that = this;
-		var serial = this._clipboardSerial;
-		if (!this._hideDownloadTimer)
-			this._hideDownloadTimer = setTimeout(function() {
-				that._hideDownloadTimer = null;
-				if (serial == that._clipboardSerial && that._downloadProgressStatus() === 'downloadButton')
-					that._stopHideDownload();
-			}, 1000 * s);
+		if (this._downloadProgressStatus() === 'downloadButton')
+			this._stopHideDownload();
 	},
 
 	// useful if we did an internal paste already and don't want that.
 	_stopHideDownload: function() {
-		clearTimeout(this._hideDownloadTimer);
-		this._hideDownloadTimer = null;
-
-		if (!this._downloadProgress ||
-		    !this._downloadProgress.isVisible() ||
-		    this._downloadProgress.isClosed())
+		if (!this._downloadProgress || this._downloadProgress.isClosed())
 			return;
 		this._downloadProgress._onClose();
-	},
-
-	_userAlreadyWarned: function (warning) {
-		var itemKey = warning;
-		var storage = localStorage;
-		if (storage && !storage.getItem(itemKey)) {
-			storage.setItem(itemKey, '1');
-			return false;
-		} else if (!storage)
-			return false;
-
-		return true;
 	},
 
 	_warnCopyPaste: function() {
@@ -883,22 +862,6 @@ L.Clipboard = L.Class.extend({
 		return msg.replace('%productName', productName);
 	},
 
-	_warnFirstLargeCopyPaste: function () {
-		if (this._userAlreadyWarned('warnedAboutLargeCopy'))
-			return;
-
-		var msg = _('<p>If you would like to share larger elements of your document with other applications ' +
-			    'it is necessary to first download them onto your device. To do that press the ' +
-			    '"Start download" button below, and when complete click "Confirm copy to clipboard".</p>' +
-			    '<p>If you are copy and pasting between documents inside %productName, ' +
-			    'there is no need to download.</p>');
-
-		this._map.uiManager.showInfoModal('large_copy_paste_warning');
-		document.getElementById('large_copy_paste_warning').innerHTML = this._substProductName(msg);
-		document.getElementById('large_copy_paste_warning').tabIndex = 0;
-		document.getElementById('large_copy_paste_warning').focus(); // We hid the OK button, we need to set focus manually on the popup.
-	},
-
 	_warnLargeCopyPasteAlreadyStarted: function () {
 		this._map.uiManager.showInfoModal('large copy paste started warning');
 		document.getElementById('large copy paste started warning').innerHTML = _('<p>A download due to a large copy/paste operation has already started. ' +
@@ -912,6 +875,10 @@ L.Clipboard = L.Class.extend({
 			var result = document.getElementById(this.pasteSpecialDialogId);
 			return result !== undefined && result !== null ? true: false;
 		}
+	},
+
+	isCopyPasteDialogReadyForCopy: function () {
+		return this._downloadProgress && this._downloadProgress.isComplete();
 	},
 
 	_openPasteSpecialPopup: function () {

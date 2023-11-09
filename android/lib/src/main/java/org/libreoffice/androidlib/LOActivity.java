@@ -23,6 +23,7 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.res.AssetFileDescriptor;
 import android.content.res.AssetManager;
+import android.content.res.Configuration;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.AsyncTask;
@@ -74,6 +75,7 @@ import java.util.Map;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.app.AppCompatDelegate;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
@@ -96,6 +98,7 @@ public class LOActivity extends AppCompatActivity {
     private static final String CLIPBOARD_COOL_SIGNATURE = "cool-clip-magic-4a22437e49a8-";
     public static final String RECENT_DOCUMENTS_KEY = "RECENT_DOCUMENTS_LIST";
     private static String USER_NAME_KEY = "USER_NAME";
+    public static final String NIGHT_MODE_KEY = "NIGHT_MODE";
 
     private File mTempFile = null;
 
@@ -349,6 +352,8 @@ public class LOActivity extends AppCompatActivity {
             webSettings.setJavaScriptEnabled(true);
             mWebView.addJavascriptInterface(this, "COOLMessageHandler");
 
+            webSettings.setDomStorageEnabled(true);
+
             // allow debugging (when building the debug version); see details in
             // https://developers.google.com/web/tools/chrome-devtools/remote-debugging/webviews
             boolean isChromeDebugEnabled = sPrefs.getBoolean("ENABLE_CHROME_DEBUGGING", false);
@@ -393,7 +398,7 @@ public class LOActivity extends AppCompatActivity {
                 }
             });
 
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU && ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
                 Log.i(TAG, "asking for read storage permission");
                 ActivityCompat.requestPermissions(this,
                         new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
@@ -637,6 +642,7 @@ public class LOActivity extends AppCompatActivity {
 
     @Override
     public void onActivityResult(int requestCode, int resultCode, Intent intent) {
+        super.onActivityResult(requestCode, resultCode, intent);
         if (resultCode != RESULT_OK) {
             if (requestCode == REQUEST_SELECT_IMAGE_FILE) {
                 valueCallback.onReceiveValue(null);
@@ -655,18 +661,15 @@ public class LOActivity extends AppCompatActivity {
             requestCopy = true;
             if (getMimeType().equals("text/plain")) {
                 requestCode = REQUEST_SAVEAS_ODT;
-            }
-            else if (getMimeType().equals("text/comma-separated-values")) {
+            } else if (getMimeType().equals("text/comma-separated-values")) {
                 requestCode = REQUEST_SAVEAS_ODS;
-            }
-            else if (getMimeType().equals("application/vnd.ms-excel.sheet.binary.macroenabled.12")) {
+            } else if (getMimeType().equals("application/vnd.ms-excel.sheet.binary.macroenabled.12")) {
                 requestCode = REQUEST_SAVEAS_ODS;
-            }
-            else {
+            } else {
                 String filename = getFileName(true);
                 String extension = filename.substring(filename.lastIndexOf('.') + 1);
                 requestCode = getRequestIDForFormat(extension);
-                assert(requestCode != 0);
+                assert (requestCode != 0);
             }
         }
         switch (requestCode) {
@@ -703,8 +706,7 @@ public class LOActivity extends AppCompatActivity {
                         inputStream = new FileInputStream(tempFile);
                         try {
                             outputStream = getContentResolver().openOutputStream(intent.getData(), "wt");
-                        }
-                        catch (FileNotFoundException e) {
+                        } catch (FileNotFoundException e) {
                             Log.i(TAG, "failed with the 'wt' mode, trying without: " + e.getMessage());
                             outputStream = getContentResolver().openOutputStream(intent.getData());
                         }
@@ -729,7 +731,7 @@ public class LOActivity extends AppCompatActivity {
                         }
                     }
                     if (requestCopy == true) {
-                        assert(_tempFile != null);
+                        assert (_tempFile != null);
                         mTempFile = _tempFile;
                         getIntent().setData(intent.getData());
                         /** add the document to recents */
@@ -858,12 +860,32 @@ public class LOActivity extends AppCompatActivity {
 
         if (isLargeScreen() && !isChromeOS())
             finalUrlToLoad += "&userinterfacemode=notebookbar";
+
+        if(isDarkMode()) {
+            finalUrlToLoad += "&darkTheme=true";
+        }
+
         // load the page
         mWebView.loadUrl(finalUrlToLoad);
 
         documentLoaded = true;
 
         loadDocumentMillis = android.os.SystemClock.uptimeMillis();
+    }
+
+    private boolean isDarkMode() {
+        SharedPreferences recentPrefs = getSharedPreferences(EXPLORER_PREFS_KEY, MODE_PRIVATE);
+        int mode = recentPrefs.getInt(NIGHT_MODE_KEY, AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
+        switch (mode) {
+            case -1:
+                int darkModeFlag = getBaseContext().getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
+                return darkModeFlag == Configuration.UI_MODE_NIGHT_YES;
+            case 1:
+                return false;
+            case 2:
+                return true;
+        }
+        return false;
     }
 
     static {
@@ -1124,7 +1146,7 @@ public class LOActivity extends AppCompatActivity {
         try {
             cursor = getContentResolver().query(getIntent().getData(), null, null, null, null);
             if (cursor != null && cursor.moveToFirst())
-                filename = cursor.getString(cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME));
+                filename = cursor.getString(cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME));
         } catch (Exception e) {
             return null;
         }

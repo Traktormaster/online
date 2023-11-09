@@ -1,9 +1,15 @@
 /* -*- js-indent-level: 8 -*- */
 /*
- * L.Control.NotebookbarBuilder
+ * Copyright the Collabora Online contributors.
+ *
+ * SPDX-License-Identifier: MPL-2.0
  */
 
-/* global $ _ _UNO JSDialog */
+/*
+ * L.Control.NotebookbarBuilder - builder of native HTML widgets for tabbed menu
+ */
+
+/* global $ _ _UNO JSDialog app */
 L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 
 	_customizeOptions: function() {
@@ -13,12 +19,12 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 	},
 
 	_overrideHandlers: function() {
-		this._controlHandlers['combobox'] = this._comboboxControlHandler;
-		this._controlHandlers['listbox'] = this._comboboxControlHandler;
-		this._controlHandlers['tabcontrol'] = this._overriddenTabsControlHandler;
-		this._controlHandlers['menubartoolitem'] = this._inlineMenubarToolItemHandler;
 		this._controlHandlers['bigmenubartoolitem'] = this._bigMenubarToolItemHandler;
 		this._controlHandlers['bigtoolitem'] = this._bigtoolitemHandler;
+		this._controlHandlers['combobox'] = this._comboboxControl;
+		this._controlHandlers['menubartoolitem'] = this._inlineMenubarToolItemHandler;
+		this._controlHandlers['tabcontrol'] = this._overriddenTabsControlHandler;
+		this._controlHandlers['tabpage'] = this._overriddenTabPageHandler;
 		this._controlHandlers['toolbox'] = this._toolboxHandler;
 
 		this._controlHandlers['pushbutton'] = function() { return false; };
@@ -37,6 +43,7 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 
 		this._toolitemHandlers['.uno:InsertTable'] = this._insertTableControl;
 		this._toolitemHandlers['.uno:InsertGraphic'] = this._insertGraphicControl;
+		this._toolitemHandlers['.uno:SelectBackground'] = this._selectBackgroundControl;
 		this._toolitemHandlers['.uno:InsertAnnotation'] = this._insertAnnotationControl;
 		this._toolitemHandlers['.uno:LineSpacing'] = this._lineSpacingControl;
 		this._toolitemHandlers['.uno:CharSpacing'] = this._CharSpacing;
@@ -236,106 +243,62 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 			$('#applystyle').val(state).trigger('change');
 		}
 		else if (commandName === '.uno:ModifiedStatus') {
-			if (e.state === 'true') {
-				$('#Save1').addClass('savemodified');
-				$('#Save').addClass('savemodified');
-			}
-			else {
-				$('#Save1').removeClass('savemodified');
-				$('#Save').removeClass('savemodified');
+			if (document.getElementById('save')) {
+				if (state === 'true') {
+					document.getElementById('save').classList.add('savemodified');
+					document.getElementById('file-save').classList.add('savemodified');
+				}
+				else {
+					document.getElementById('save').classList.remove('savemodified');
+					document.getElementById('file-save').classList.remove('savemodified');
+				}
 			}
 		}
-	},
-
-	_createiOsFontButton: function(parentContainer, data, builder) {
-		// Fix issue #5838 Use unique IDs for font name combobox elements
-		var table = L.DomUtil.createWithId('div', data.id, parentContainer);
-		var row = L.DomUtil.create('div', 'notebookbar row', table);
-		var button = L.DomUtil.createWithId('button', data.id + 'ios', row);
-
-		$(table).addClass('select2 select2-container select2-container--default');
-		// Fix issue #5838 Don't add the "select2-selection--single" class
-		$(row).addClass('select2-selection');
-		$(button).addClass('select2-selection__rendered');
-
-		if (data.selectedEntries.length && data.entries[data.selectedEntries[0]])
-			button.innerText = data.entries[data.selectedEntries[0]];
-		else if (window.LastSetiOSFontNameButtonFont)
-			button.innerText = window.LastSetiOSFontNameButtonFont;
-		else if (data.text)
-			button.innerText = data.text;
-		var map = builder.map;
-		window.MagicFontNameCallback = function(font) {
-			button.innerText = font;
-			map.applyFont(font);
-			map.focus();
-		};
-		button.onclick = function() {
-
-			// There doesn't seem to be a way to pre-select an entry in the
-			// UIFontPickerViewController so no need to pass the
-			// current font here.
-			window.postMobileMessage('FONTPICKER');
-		};
 	},
 
 	_comboboxControl: function(parentContainer, data, builder) {
 		if (!data.entries || data.entries.length === 0)
 			return false;
 
+		// Fix exception due to undefined _createiOsFontButton function
+		// Starting with commit 4082e1e570258f5032dfd460cf4d34ff6ae0d575,
+		// this._createiOsFontButton() throws and exception because "this"
+		// is a Window object. So fix this by moving the _createiOsFontButton
+		// function inline.
 		if (window.ThisIsTheiOSApp && data.id === 'fontnamecombobox') {
-			this._createiOsFontButton(parentContainer, data, builder);
+			// Fix issue #5838 Use unique IDs for font name combobox elements
+			var table = L.DomUtil.createWithId('div', data.id, parentContainer);
+			var row = L.DomUtil.create('div', 'notebookbar row', table);
+			var button = L.DomUtil.createWithId('button', data.id + 'ios', row);
+
+			$(table).addClass('select2 select2-container select2-container--default');
+			// Fix issue #5838 Don't add the "select2-selection--single" class
+			$(row).addClass('select2-selection');
+			$(button).addClass('select2-selection__rendered');
+
+			if (data.selectedEntries.length && data.entries[data.selectedEntries[0]])
+				button.innerText = data.entries[data.selectedEntries[0]];
+			else if (window.LastSetiOSFontNameButtonFont)
+				button.innerText = window.LastSetiOSFontNameButtonFont;
+			else if (data.text)
+				button.innerText = data.text;
+			var map = builder.map;
+			window.MagicFontNameCallback = function(font) {
+				button.innerText = font;
+				map.applyFont(font);
+				map.focus();
+			};
+			button.onclick = function() {
+
+				// There doesn't seem to be a way to pre-select an entry in the
+				// UIFontPickerViewController so no need to pass the
+				// current font here.
+				window.postMobileMessage('FONTPICKER');
+			};
 			return false;
 		}
 
-		var container = L.DomUtil.createWithId('div', data.id, parentContainer);
-		L.DomUtil.addClass(container, builder.options.cssClass);
-		L.DomUtil.addClass(container, 'ui-combobox');
-		var select = L.DomUtil.create('select', builder.options.cssClass, container);
-		builder.map.uiManager.enableTooltip(container);
-
-		var processedData = [];
-
-		var isFontSizeSelector = (data.id === 'fontsize' || data.id === 'fontsizecombobox');
-		var isFontSelector = (data.id === 'fontnamecombobox');
-
-		if (isFontSelector) {
-			builder.map.createFontSelector('.notebookbar #' + data.id + ' select');
-			return;
-		} else if (isFontSizeSelector) {
-			builder.map.createFontSizeSelector('.notebookbar #' + data.id + ' select');
-			return;
-		}
-
-		data.entries.forEach(function (value, index) {
-			var selected = parseInt(data.selectedEntries[0]) == index;
-			var id = index;
-			if (isFontSizeSelector)
-				id = parseFloat(value);
-			if (isFontSelector)
-				id = value;
-			processedData.push({id: id, text: value, selected: selected});
-		});
-
-		$(select).select2({
-			data: processedData,
-			placeholder: _(builder._cleanText(data.text))
-		});
-
-		$(select).on('select2:select', function (e) {
-			var value = e.params.data.id + ';' + e.params.data.text;
-			builder.callback('combobox', 'selected', container, value, builder);
-		});
-
-		return false;
-	},
-
-	_comboboxControlHandler: function(parentContainer, data, builder) {
-		if ((data.command === '.uno:StyleApply' && builder.map.getDocType() === 'spreadsheet') ||
-			(data.id === ''))
-			return false;
-
-		return builder._comboboxControl(parentContainer, data, builder);
+		return JSDialog.combobox(parentContainer, data, builder);
 	},
 
 	// overriden
@@ -348,7 +311,9 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 			var tabIsSelected = $(tabs[t]).hasClass('selected');
 			var notebookbarIsCollapsed = builder.wizard.isCollapsed();
 
-			if (tabIsSelected && !notebookbarIsCollapsed) {
+			var accessibilityInputElementHasFocus = app.UI.notebookbarAccessibility && app.UI.notebookbarAccessibility.accessibilityInputElement === document.activeElement ? true: false;
+
+			if (tabIsSelected && !notebookbarIsCollapsed && !accessibilityInputElementHasFocus) {
 				builder.wizard.collapse();
 				$(tabs[t]).prop('title', tooltipCollapsed);
 			} else if (notebookbarIsCollapsed) {
@@ -385,6 +350,15 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 	_overriddenTabsControlHandler: function(parentContainer, data, builder) {
 		data.tabs = builder.wizard.getTabs();
 		return builder._tabsControlHandler(parentContainer, data, builder, _('Tap to collapse'));
+	},
+
+	_overriddenTabPageHandler: function(parentContainer, data, builder) {
+		var result = builder._tabPageHandler(parentContainer, data, builder);
+
+		var tabPage = parentContainer.lastChild;
+		JSDialog.MakeFocusCycle(tabPage);
+
+		return result;
 	},
 
 	_toolboxHandler: function(parentContainer, data) {
@@ -439,7 +413,8 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 					else if (e.code === 'Escape') {
 						if (elementToHide)
 							elementToHide.style.display = 'none';
-						document.getElementById(parentId).focus();
+						var parentUNOButton = document.getElementById(parentId).querySelector('button');
+						parentUNOButton ? document.getElementById(parentId).querySelector('button').focus() : document.getElementById(parentId).focus();
 					}
 				};
 			});
@@ -568,9 +543,14 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 					'command': !window.ThisIsAMobileApp ? 'exportepub' : 'downloadas-epub'
 				},
 				{
-					'id': !window.ThisIsAMobileApp ? 'exportpdf' : 'downloadas-pdf',
+					'id': !window.ThisIsAMobileApp ? 'exportdirectpdf' : 'downloadas-pdf',
 					'text': _('PDF Document (.pdf)'),
-					'command': !window.ThisIsAMobileApp ? 'exportpdf' : 'downloadas-pdf'
+					'command': !window.ThisIsAMobileApp ? 'exportdirectpdf' : 'downloadas-pdf'
+				},
+				{
+					'id': 'exportpdf' ,
+					'text': _('PDF Document (.pdf) as...'),
+					'command': 'exportpdf' 
 				}
 			];
 		} else if (docType === 'spreadsheet') {
@@ -592,9 +572,14 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 					'text': _('CSV File (.csv)')
 				},
 				{
-					'id': !window.ThisIsAMobileApp ? 'exportpdf' : 'downloadas-pdf',
+					'id': !window.ThisIsAMobileApp ? 'exportdirectpdf' : 'downloadas-pdf',
 					'text': _('PDF Document (.pdf)'),
-					'command': !window.ThisIsAMobileApp ? 'exportpdf' : 'downloadas-pdf'
+					'command': !window.ThisIsAMobileApp ? 'exportdirectpdf' : 'downloadas-pdf'
+				},
+				{
+					'id': 'exportpdf' ,
+					'text': _('PDF Document (.pdf) as...'),
+					'command': 'exportpdf' 
 				}
 			];
 		} else if (docType === 'presentation') {
@@ -616,9 +601,14 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 					'text': _('PowerPoint 2003 Presentation (.ppt)')
 				},
 				{
-					'id': !window.ThisIsAMobileApp ? 'exportpdf' : 'downloadas-pdf',
+					'id': !window.ThisIsAMobileApp ? 'exportdirectpdf' : 'downloadas-pdf',
 					'text': _('PDF Document (.pdf)'),
-					'command': !window.ThisIsAMobileApp ? 'exportpdf' : 'downloadas-pdf'
+					'command': !window.ThisIsAMobileApp ? 'exportdirectpdf' : 'downloadas-pdf'
+				},
+				{
+					'id': 'exportpdf' ,
+					'text': _('PDF Document (.pdf) as...'),
+					'command': 'exportpdf' 
 				}
 			];
 		}
@@ -814,65 +804,67 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 		var options = {hasDropdownArrow: true};
 		var control = builder._unoToolButton(parentContainer, data, builder, options);
 
-		var closeAll = function (skip) {
-			var menus = ['conditionalformatmenu', 'conditionalformatmenu-sub'];
-			for (var i = 0; i < menus.length; ++i) {
-				// called on onHide so skip it, it is already being hidden
-				if (skip === menus[i])
-					continue;
-				var div = $('#w2ui-overlay-'+ menus[i]);
-				if (div.length && div[0])
-					div[0].hide();
-			}
-		};
-
 		var menu = [
-			{text: _UNO('.uno:ConditionalFormatDialog', 'spreadsheet'), uno: 'ConditionalFormatDialog'},
-			{text: _UNO('.uno:ColorScaleFormatDialog', 'spreadsheet'), uno: 'ColorScaleFormatDialog'},
-			{text: _UNO('.uno:DataBarFormatDialog', 'spreadsheet'), uno: 'DataBarFormatDialog'},
-			{text: _UNO('.uno:IconSetFormatDialog', 'spreadsheet'), uno: 'IconSetFormatDialog', html: window.getConditionalFormatMenuHtml('iconsetoverlay') },
-			{text: _UNO('.uno:CondDateFormatDialog', 'spreadsheet'), uno: 'CondDateFormatDialog'},
+			{text: _('Condition...'), items: [
+				{text: _('Greater than...'), uno: '.uno:ConditionalFormatEasy?FormatRule:short=2'},
+				{text: _('Less than...'), uno: '.uno:ConditionalFormatEasy?FormatRule:short=1'},
+				{text: _('Equal to...'), uno: '.uno:ConditionalFormatEasy?FormatRule:short=0'},
+				{text: _('Between...'), uno: '.uno:ConditionalFormatEasy?FormatRule:short=6'},
+				{type: 'separator'},
+				{text: _('More conditions...'), uno: '.uno:ConditionalFormatDialog'}
+			]},
 			{type: 'separator'},
-			{text: _UNO('.uno:ConditionalFormatManagerDialog', 'spreadsheet'), uno: 'ConditionalFormatManagerDialog'}
+			{id: 'scaleset', text: _UNO('.uno:ColorScaleFormatDialog', 'spreadsheet'), items: [
+				// open popup in the callback
+			]},
+			{id: 'databarset', text: _UNO('.uno:DataBarFormatDialog', 'spreadsheet'), items: [
+				// open popup in the callback
+			]},
+			{id: 'iconset', text: _UNO('.uno:IconSetFormatDialog', 'spreadsheet'), items: [
+				// open popup in the callback
+			]},
+			{text: _UNO('.uno:CondDateFormatDialog', 'spreadsheet'), uno: '.uno:CondDateFormatDialog'},
+			{type: 'separator'},
+			{text: _UNO('.uno:ConditionalFormatManagerDialog', 'spreadsheet'), uno: '.uno:ConditionalFormatManagerDialog'}
 		];
 
 		$(control.container).unbind('click.toolbutton');
-		$(control.container).click(function () {
-			if (!$('#conditionalformatmenu-grid').length) {
-				var itemCallback = function(event) {
-					if (event.item.html && !$('#w2ui-overlay-conditionalformatmenu-sub').length) {
-						$(event.originalEvent.target).w2overlay({
-							name: 'conditionalformatmenu-sub',
-							html: event.item.html,
-							left: 100,
-							top: -20,
-							noTip: true,
-							onHide: function() {
-								closeAll(this.name);
-							}
-						});
-						if ($('#iconsetoverlay').length) {
-							$('#iconsetoverlay').click(function() {
-								builder.map.sendUnoCommand('.uno:IconSetFormatDialog');
-								closeAll();
-							});
-						}
-					} else if (!event.item.html) {
-						builder.map.sendUnoCommand('.uno:' + event.item.uno);
-						closeAll();
+
+		var getMenuHtml = function (id) {
+			if (id === 'iconset')
+				return window.getConditionalFormatMenuHtml('iconsetoverlay', true);
+			else if (id === 'scaleset')
+				return window.getConditionalColorScaleMenuHtml('iconsetoverlay', true);
+			else if (id === 'databarset')
+				return window.getConditionalDataBarMenuHtml('iconsetoverlay', true);
+		};
+
+		var dropdownId = data.id;
+		var clickFunction = function () {
+			var callback = function(objectType, eventType, object, data, entry) {
+				if (eventType === 'selected') {
+					var pos = data.substr(0, parseInt(data.indexOf(';')));
+					if (entry.id) {
+						var subDropdownId = dropdownId + '-' + pos;
+						var dropdown = JSDialog.GetDropdown(subDropdownId);
+						var container = dropdown.querySelector('.ui-grid');
+						container.innerHTML = getMenuHtml(entry.id);
+						JSDialog.MakeFocusCycle(container);
+						JSDialog.GetFocusableElements(container)[0].focus();
+					} else if (entry.uno) {
+						builder.map.sendUnoCommand(entry.uno);
+						JSDialog.CloseDropdown(dropdownId);
 					}
-				};
+				}
 
-				$(control.container).w2menu({
-					name: 'conditionalformatmenu',
-					items: menu,
-					keepOpen: true,
-					onSelect: itemCallback
-				});
+				return true;
+			};
 
-				builder._makeW2MenuFocusable(builder, 'w2ui-overlay-conditionalformatmenu', menu, data.id, itemCallback);
-			}
-		});
+			JSDialog.OpenDropdown(dropdownId, control.container, menu, callback);
+		};
+
+		control.container.addEventListener('click', clickFunction);
+
 		builder._preventDocumentLosingFocusOnClick(control.container);
 	},
 
@@ -922,6 +914,17 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 			} else {
 				L.DomUtil.get('insertgraphic').click();
 			}
+		});
+		builder._preventDocumentLosingFocusOnClick(control.container);
+	},
+
+	_selectBackgroundControl: function(parentContainer, data, builder) {
+		var options = {hasDropdownArrow: false};
+		var control = builder._unoToolButton(parentContainer, data, builder, options);
+
+		$(control.container).unbind('click.toolbutton');
+		$(control.container).click(function () {
+			L.DomUtil.get('selectbackground').click();
 		});
 		builder._preventDocumentLosingFocusOnClick(control.container);
 	},
@@ -1091,6 +1094,11 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 	},
 
 	buildControl: function(parent, data) {
+		if (!data.length)
+			return;
+
+		data = data[0];
+
 		var type = data.type;
 		var handler = this._controlHandlers[type];
 
@@ -1109,6 +1117,11 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 		}
 
 		this.options.useInLineLabelsForUnoButtons = false;
+	},
+
+	// replaces widget in-place with new instance with updated data
+	updateWidget: function (container, data) {
+		this._updateWidgetImpl(container, data, this.buildControl);
 	},
 
 	build: function(parent, data, hasVerticalParent, parentHasManyChildren) {

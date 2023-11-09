@@ -38,7 +38,7 @@ L.WriterTileLayer = L.CanvasTileLayer.extend({
 		if (values.comments) {
 			values.comments.forEach(function(comment) {
 				comment.id = comment.id.toString();
-				comment.parent = comment.parent.toString();
+				comment.parent = comment.parentId.toString();
 			});
 			app.sectionContainer.getSectionWithName(L.CSections.CommentList.name).importComments(values.comments);
 		}
@@ -98,22 +98,10 @@ L.WriterTileLayer = L.CanvasTileLayer.extend({
 			var bounds = this._coordsToTileBounds(coords);
 			if (coords.part === command.part && coords.mode === command.mode &&
 				invalidBounds.intersects(bounds)) {
-				if (this._tiles[key]._invalidCount) {
-					this._tiles[key]._invalidCount += 1;
-				}
-				else {
-					this._tiles[key]._invalidCount = 1;
-				}
 				if (visibleArea.intersects(bounds)) {
 					needsNewTiles = true;
-					if (this._debug) {
-						this._debugAddInvalidationData(this._tiles[key]);
-					}
 				}
-				else {
-					// tile outside of the visible area, just remove it
-					this._removeTile(key);
-				}
+				this._invalidateTile(key, command.wireId);
 			}
 		}
 
@@ -142,6 +130,15 @@ L.WriterTileLayer = L.CanvasTileLayer.extend({
 
 	_onStatusMsg: function (textMsg) {
 		var command = app.socket.parseServerCmd(textMsg);
+		if (app.socket._reconnecting) {
+			// persist cursor position on reconnection
+			// In writer, core always sends the cursor coordinates
+			// of the first paragraph of the document so we want to ignore that
+			// to eliminate document jumping while reconnecting
+			this.persistCursorPositionInWriter = true;
+			this._postMouseEvent('buttondown', this.lastCursorPos.x, this.lastCursorPos.y, 1, 1, 0);
+			this._postMouseEvent('buttonup', this.lastCursorPos.x, this.lastCursorPos.y, 1, 1, 0);
+		}
 		if (!command.width || !command.height || this._documentInfo === textMsg)
 			return;
 

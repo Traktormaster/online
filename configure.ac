@@ -3,7 +3,7 @@
 
 AC_PREREQ([2.63])
 
-AC_INIT([coolwsd], [23.05.1.2], [https://github.com/CollaboraOnline/online/issues], [coolwsd], [https://collaboraonline.github.io/])
+AC_INIT([coolwsd], [23.05.5.3], [https://github.com/CollaboraOnline/online/issues], [coolwsd], [https://collaboraonline.github.io/])
 LT_INIT([shared, disable-static, dlopen])
 
 AM_INIT_AUTOMAKE([1.10 foreign subdir-objects tar-pax -Wno-portability])
@@ -96,7 +96,7 @@ for MODULE in lxml polib; do
         AC_MSG_RESULT([yes])
     else
         AC_MSG_RESULT([no])
-        AS_IF([test `uname -s` = Linux -o `uname -s` = FreeBSD -o `uname -s`= Darwin],
+        AS_IF([test `uname -s` = Linux -o `uname -s` = FreeBSD -o `uname -s` = Darwin],
               [AC_MSG_ERROR([${MODULE} for python3 is needed. It might be in a package called python3-${MODULE}.])],
               [AC_MSG_WARN([${MODULE} for python3 is needed. It might be in a package called python3-${MODULE}. But
                if you are building the JS bits on another (Linux) machine, that doesn't matter])])
@@ -346,7 +346,8 @@ AC_ARG_WITH([infobar-url],
 AC_ARG_WITH([coverage],
              AS_HELP_STRING([--with-coverage=<gcov>],
                             [Enable a code-coverage method. Currently only gcov is supported (works with both gcc and clang).
-                            Output HTML in gcov/ directory.]))
+                            Output HTML in gcov/ directory.
+                            Generate report with 'make coverage-report'. Clean coverage files with 'make coverage-clean']))
 
 AC_ARG_WITH([sanitizer],
              AS_HELP_STRING([--with-sanitizer],
@@ -456,14 +457,6 @@ if test "$enable_debug" = "yes"; then
 else
     AC_MSG_RESULT([no (Release build)])
     AC_DEFINE([ENABLE_DEBUG],0,[Whether to compile in some extra debugging support code and disable some security pieces])
-    AC_MSG_CHECKING([whether to bundle JS and CSS files])
-    if test "$enable_bundle" != "yes"; then
-       ENABLE_BUNDLE=false
-       bundle_msg="using individual JS and CSS files"
-       AC_MSG_RESULT([no ($bundle_msg)])
-    else
-       AC_MSG_RESULT([yes])
-    fi
 fi
 AC_SUBST(ENABLE_DEBUG)
 AC_SUBST(ENABLE_BUNDLE)
@@ -1037,6 +1030,7 @@ fi
 
 # Check if we have clang, rather than gcc, which
 # doesn't like -pthread on the linker command-line.
+HAVE_CLANG=false
 AC_MSG_CHECKING([whether the compiler is clang])
 AC_COMPILE_IFELSE([AC_LANG_SOURCE([
     #if !defined(__clang__)
@@ -1044,10 +1038,11 @@ AC_COMPILE_IFELSE([AC_LANG_SOURCE([
     #endif
 ])],
                     [AC_MSG_RESULT([yes])
-                    AC_DEFINE([HAVE_CLANG],1,[whether the C++ compiler is clang])],
+                    AC_DEFINE([HAVE_CLANG],true,[whether the C++ compiler is clang])],
                     [AC_MSG_RESULT([no])
-                    AC_DEFINE([HAVE_CLANG],0,[whether the C++ compiler is clang])])
-AM_CONDITIONAL([HAVE_CLANG], [test "$HAVE_CLANG" = "1"])
+                    AC_DEFINE([HAVE_CLANG],false,[whether the C++ compiler is clang])])
+AM_CONDITIONAL([HAVE_CLANG], [test "$HAVE_CLANG" = "true"])
+AC_SUBST(HAVE_CLANG)
 
 AS_IF([test "$ENABLE_GTKAPP" != true],
 [CXXFLAGS="$CXXFLAGS $CXXFLAGS_CXXSTD"])
@@ -1123,7 +1118,7 @@ AS_IF([test "$ENABLE_IOSAPP" != "true" -a "$ENABLE_ANDROIDAPP" != "true"],
       [AC_MSG_CHECKING([for LibreOffice path])
       if test -n "$with_lo_path"; then
           # strip trailing '/' from LO_PATH, 'ln -s' with such path will otherwise fail
-          LO_PATH="${with_lo_path%/}"
+          LO_PATH=`readlink -f ${with_lo_path%/}`
           AC_MSG_RESULT([found])
       else
           AC_MSG_RESULT([not found])
@@ -1233,6 +1228,41 @@ if test "$host_os" = "emscripten" ; then
     ENABLE_EMSCRIPTENAPP=true
 fi
 AC_SUBST(ENABLE_EMSCRIPTENAPP)
+
+has_simd=no
+if test "$mobile_app" != "true"; then
+    # Check for SIMD / AVX2 acceleration compile-time goodness
+    SIMD_CFLAGS=-mavx2
+    AC_MSG_CHECKING([whether $CC has AVX2 SIMD support])
+
+    save_CFLAGS=$CFLAGS
+    AC_LANG_PUSH([C])
+    CFLAGS="$CFLAGS $SIMD_CFLAGS"
+
+    AC_COMPILE_IFELSE([AC_LANG_SOURCE([
+        #include <immintrin.h>
+        int main () {
+            __builtin_cpu_init();
+            __m256i vec = _mm256_set1_epi32(0);
+            (void)vec;
+            return __builtin_cpu_supports ("avx2");
+        }])],
+        [has_simd=yes],
+        [has_simd=no])
+
+    AC_LANG_POP([C])
+    CFLAGS=$save_CFLAGS
+
+    AC_MSG_RESULT([${has_simd}])
+fi
+
+if test "${has_simd}" = "no" ; then
+   SIMD_CFLAGS=
+   AC_DEFINE([ENABLE_SIMD],0,[Whether to enable SIMD])
+else
+   AC_DEFINE([ENABLE_SIMD],1,[Whether to enable SIMD])
+fi
+AC_SUBST(SIMD_CFLAGS)
 
 ENABLE_SSL=true
 if test "$enable_ssl" != "no" -a "$mobile_app" != "true"; then
@@ -1607,7 +1637,7 @@ if test "$enable_feature_lock" = "yes"; then
         <unlock_title desc=\"Title to show user when prompting the unlock popup\" default=\"$UNLOCK_TITLE\">$UNLOCK_TITLE</unlock_title>
         <unlock_link desc=\"Link from where user can unlock the features\" default=\"$UNLOCK_LINK\">$UNLOCK_LINK</unlock_link>
         <unlock_description desc=\"Description about unlocking features\" default=\"$UNLOCK_DESCRIPTION\">$UNLOCK_DESCRIPTION</unlock_description>
-        <unlock_image desc=\"URL of image shown when unlock dialog get displayed\" default=\"\"></unlock_image><!-- URL structure - https://<hostname>/static/<image_endpoint> -->
+        <unlock_image desc=\"URL of image shown when unlock dialog get displayed\" default=\"\"></unlock_image>
         <writer_unlock_highlights desc=\"Short note about Writer benefits of unlocking\" default=\"$WRITER_UNLOCK_HIGHLIGHTS\">$WRITER_UNLOCK_HIGHLIGHTS</writer_unlock_highlights>
         <calc_unlock_highlights desc=\"Short note about Calc benefits of unlocking\" default=\"$CALC_UNLOCK_HIGHLIGHTS\">$CALC_UNLOCK_HIGHLIGHTS</calc_unlock_highlights>
         <impress_unlock_highlights desc=\"Short note about Impress benefits of unlocking\" default=\"$IMPRESS_UNLOCK_HIGHLIGHTS\">$IMPRESS_UNLOCK_HIGHLIGHTS</impress_unlock_highlights>

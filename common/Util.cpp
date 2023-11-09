@@ -145,7 +145,8 @@ namespace Util
                 {
                     LOG_ERR("failed to read " << length << " hard random bytes, got " << len << " for hash: " << errno);
                 }
-                close(fd);
+                if (fd >= 0)
+                    close(fd);
             }
 
             hex.rdbuf()->setLineLength(0); // Don't insert line breaks.
@@ -643,7 +644,7 @@ namespace Util
         hash.resize(std::min(8, (int)hash.length()));
     }
 
-    std::string getProcessIdentifier()
+    const std::string& getProcessIdentifier()
     {
         static std::string id = Util::rng::getHexString(8);
 
@@ -734,17 +735,19 @@ namespace Util
 
     /// Split a string in two at the delimiter and give the delimiter to the first.
     static
-    std::pair<std::string, std::string> splitLast2(const char* s, const int length, const char delimiter = ' ')
+    std::pair<std::string, std::string> splitLast2(const std::string& str, const char delimiter = ' ')
     {
-        if (s != nullptr && length > 0)
+        if (!str.empty())
         {
+            const char* s = str.c_str();
+            const int length = str.size();
             const int pos = getLastDelimiterPosition(s, length, delimiter);
             if (pos < length)
                 return std::make_pair(std::string(s, pos + 1), std::string(s + pos + 1));
         }
 
         // Not found; return in first.
-        return std::make_pair(std::string(s, length), std::string());
+        return std::make_pair(str, std::string());
     }
 
     std::tuple<std::string, std::string, std::string, std::string> splitUrl(const std::string& url)
@@ -755,7 +758,7 @@ namespace Util
         std::tie(base, params) = Util::split(url, '?', false);
 
         std::string filename;
-        std::tie(base, filename) = Util::splitLast2(base.c_str(), base.size(), '/');
+        std::tie(base, filename) = Util::splitLast2(base, '/');
         if (filename.empty())
         {
             // If no '/', then it's only filename.
@@ -849,16 +852,21 @@ namespace Util
         return base + Util::anonymize(filename, nAnonymizationSalt) + ext + params;
     }
 
-    std::string getHttpTimeNow()
+    std::string getTimeNow(const char* format)
     {
         char time_now[64];
         std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
         std::time_t now_c = std::chrono::system_clock::to_time_t(now);
         std::tm now_tm;
         gmtime_r(&now_c, &now_tm);
-        strftime(time_now, sizeof(time_now), "%a, %d %b %Y %T", &now_tm);
+        strftime(time_now, sizeof(time_now), format, &now_tm);
 
         return time_now;
+    }
+
+    std::string getHttpTimeNow()
+    {
+        return getTimeNow("%a, %d %b %Y %T");
     }
 
     std::string getHttpTime(std::chrono::system_clock::time_point time)
@@ -998,11 +1006,11 @@ namespace Util
 #endif
     }
 
-    std::map<std::string, std::string> stringVectorToMap(std::vector<std::string> sVector, const char delimiter)
+    std::map<std::string, std::string> stringVectorToMap(const std::vector<std::string>& strvector, const char delimiter)
     {
         std::map<std::string, std::string> result;
 
-        for (std::vector<std::string>::iterator it = sVector.begin(); it != sVector.end(); it++)
+        for (auto it = strvector.begin(); it != strvector.end(); ++it)
         {
             std::size_t delimiterPosition = 0;
             delimiterPosition = (*it).find(delimiter, 0);
@@ -1010,8 +1018,7 @@ namespace Util
             {
                 std::string key = (*it).substr(0, delimiterPosition);
                 delimiterPosition++;
-                std::string value = (*it).substr(delimiterPosition);
-                result[key] = value;
+                result[key] = (*it).substr(delimiterPosition);
             }
             else
             {
@@ -1133,6 +1140,7 @@ namespace Util
             LOG_FTL("Forced Exit with code: " << code);
         else
             LOG_INF("Forced Exit with code: " << code);
+
         Log::shutdown();
 
 #if CODE_COVERAGE

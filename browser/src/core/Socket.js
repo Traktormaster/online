@@ -10,6 +10,7 @@ app.definitions.Socket = L.Class.extend({
 	ReconnectCount: 0,
 	WasShownLimitDialog: false,
 	WSDServer: {},
+	IndirectSocketReconnectCount: 0,
 
 	/// Whether Trace Event recording is enabled or not. ("Enabled" here means whether it can be
 	/// turned on (and off again), not whether it is on.)
@@ -217,6 +218,10 @@ app.definitions.Socket = L.Class.extend({
 			if (spellOnline) {
 				msg += ' spellOnline=' + spellOnline;
 			}
+
+			var accessibilityState = window.localStorage.getItem('accessibilityState') === 'true';
+			accessibilityState = accessibilityState || L.Browser.cypressTest;
+			msg += ' accessibilityState=' + accessibilityState;
 		}
 
 		this._doSend(msg);
@@ -343,9 +348,9 @@ app.definitions.Socket = L.Class.extend({
 					}
 					catch (e)
 					{
-						// unpleasant - but stops this one problem
-						// event stopping an unknown number of others.
-						window.app.console.log('Exception ' + e + ' emitting event ' + evt.data);
+						// unpleasant - but stops this one problem event
+						// stopping an unknown number of others.
+						window.app.console.error('Exception ' + e + ' emitting event ' + evt.data);
 					}
 					finally {
 						if (completeEventOneMessage)
@@ -536,15 +541,12 @@ app.definitions.Socket = L.Class.extend({
 		var command = this.parseServerCmd(textMsg);
 		if (textMsg.startsWith('coolserver ')) {
 			// This must be the first message, unless we reconnect.
-			var oldId = null;
 			var oldVersion = null;
 			var sameFile = true;
 			// Check if we are reconnecting.
 			if (this.WSDServer && this.WSDServer.Id) {
 				// Yes we are reconnecting.
-				// If server is restarted, we have to refresh the page.
 				// If our connection was lost and is ready again, we will not need to refresh the page.
-				oldId = this.WSDServer.Id;
 				oldVersion = this.WSDServer.Version;
 
 				window.app.console.assert(this._map.options.wopiSrc === window.wopiSrc,
@@ -558,8 +560,8 @@ app.definitions.Socket = L.Class.extend({
 
 			this.WSDServer = JSON.parse(textMsg.substring(textMsg.indexOf('{')));
 
-			if (oldId && oldVersion && sameFile) {
-				if (this.WSDServer.Id !== oldId || this.WSDServer.Version !== oldVersion) {
+			if (oldVersion && sameFile) {
+				if (this.WSDServer.Version !== oldVersion) {
 					var reloadMessage = _('Server is now reachable. We have to refresh the page now.');
 					if (window.mode.isMobile())
 						reloadMessage = _('Server is now reachable...');
@@ -570,6 +572,22 @@ app.definitions.Socket = L.Class.extend({
 					else
 						this._map.fire('postMessage', {msgId: 'Reloading', args: {Reason: 'Reconnected'}});
 					setTimeout(reloadFunc, 5000);
+				}
+			}
+			if (window.indirectSocket) {
+				if (window.expectedServerId && window.expectedServerId != this.WSDServer.Id) {
+					if (this.IndirectSocketReconnectCount++ >= 3) {
+						var msg = errorMessages.clusterconfiguration.replace('%productName', (typeof brandProductName !== 'undefined' ? brandProductName : 'Collabora Online Development Edition (unbranded)'));
+						msg = msg.replace(/%0/g, window.expectedServerId);
+						msg = msg.replace(/%1/g, window.routeToken);
+						msg = msg.replace(/%2/g, this.WSDServer.Id);
+						this._map.uiManager.showInfoModal('wrong-server-modal', _('Cluster configuration warning'), msg, '', _('OK'), null, false);
+						this.IndirectSocketReconnectCount = 0;
+					} else {
+						this._map.showBusy(_('Wrong server, reconnecting...'), false);
+						this.manualReconnect(2000);
+						return;
+					}
 				}
 			}
 
@@ -684,6 +702,7 @@ app.definitions.Socket = L.Class.extend({
 					result: commandresult['result'],
 					errorMsg: commandresult['errorMsg']
 				};
+
 				this._map.fire('postMessage', {msgId: 'Action_Save_Resp', args: postMessageObj});
 			} else if (commandresult['command'] === 'load') {
 				postMessageObj = {
@@ -692,6 +711,34 @@ app.definitions.Socket = L.Class.extend({
 					errorMsg: commandresult['errorMsg']
 				};
 				this._map.fire('postMessage', {msgId: 'Action_Load_Resp', args: postMessageObj});
+			}
+			return;
+		}
+		else if (textMsg.startsWith('migrate:') && window.indirectSocket) {
+			var migrate = JSON.parse(textMsg.substring(textMsg.indexOf('{')));
+			var afterSave = migrate.afterSave;
+			if (!afterSave) {
+				window.migrating = true;
+				this._map.uiManager.closeAll();
+				if (this._map.isEditMode()) {
+					this._map.setPermission('view');
+					this._map.uiManager.showSnackbar(_('Document is getting migrated'), null, null, 3000);
+				}
+				if (migrate.saved) {
+					window.routeToken = migrate.routeToken;
+					window.expectedServerId = migrate.serverId;
+					this.manualReconnect(2000);
+				}
+				return;
+			}
+			// even after save attempt, if document is unsaved reset the file permission
+			if (migrate.saved) {
+				window.routeToken = migrate.routeToken;
+				window.expectedServerId = migrate.serverId;
+				this.manualReconnect(2000);
+			} else {
+				this._map.setPermission(app.file.permission);
+				window.migrating = false;
 			}
 			return;
 		}
@@ -1082,7 +1129,7 @@ app.definitions.Socket = L.Class.extend({
 				this._map.openUnlockPopup(blockedInfo.errorCmd);
 			return;
 		}
-		else if (textMsg.startsWith('updateroutetoken') && window.indirectionUrl != '') {
+		else if (textMsg.startsWith('updateroutetoken') && window.indirectSocket) {
 			window.routeToken = textMsg.split(' ')[1];
 			window.app.console.log('updated routeToken: ' + window.routeToken);
 		}
@@ -1144,12 +1191,9 @@ app.definitions.Socket = L.Class.extend({
 			this._onHyperlinkClickedMsg(textMsg);
 		}
 
-		var msgDelayed = false;
-		if (!this._isReady() || !this._map._docLayer || this._delayedMessages.length || this._handlingDelayedMessages) {
-			msgDelayed = this._tryToDelayMessage(textMsg);
-		}
-
-		if (this._map._docLayer && !msgDelayed) {
+		if (!this._map._docLayer || this._handlingDelayedMessages) {
+			this._delayMessage(textMsg);
+		} else {
 			this._map._docLayer._onMessage(textMsg, e.image);
 		}
 	},
@@ -1264,55 +1308,25 @@ app.definitions.Socket = L.Class.extend({
 		// var name = command.name; - ignored, we get the new name via the wopi's BaseFileName
 	},
 
-	_tryToDelayMessage: function(textMsg) {
-		var delayed = false;
-		if (textMsg.startsWith('window:') ||
-			textMsg.startsWith('celladdress:') ||
-			textMsg.startsWith('cellviewcursor:') ||
-			textMsg.startsWith('statechanged:') ||
-			textMsg.startsWith('invalidatecursor:') ||
-			textMsg.startsWith('viewinfo:')) {
-			//window.app.console.log('_tryToDelayMessage: textMsg: ' + textMsg);
-			var message = {msg: textMsg};
-			this._delayedMessages.push(message);
-			delayed  = true;
-		}
-
-		if (delayed && !this._delayedMsgHandlerTimeoutId) {
-			this._handleDelayedMessages();
-		}
-		return delayed;
+	_delayMessage: function(textMsg) {
+		var message = {msg: textMsg};
+		this._delayedMessages.push(message);
 	},
 
-	_handleDelayedMessages: function() {
-		if (!this._isReady() || !this._map._docLayer || this._handlingDelayedMessages) {
-			var that = this;
-			// Retry in a bit.
-			this._delayedMsgHandlerTimeoutId = setTimeout(function() {
-				that._handleDelayedMessages();
-			}, 100);
-			return;
-		}
-		var messages = [];
-		for (var i = 0; i < this._delayedMessages.length; ++i) {
-			var message = this._delayedMessages[i];
-			if (message)
-				messages.push(message.msg);
-		}
-		this._delayedMessages = [];
-		this._delayedMsgHandlerTimeoutId = null;
+	_handleDelayedMessages: function(docLayer) {
 		this._handlingDelayedMessages = true;
-		if (this._map._docLayer) {
-			for (var k = 0; k < messages.length; ++k) {
-				try {
-					this._map._docLayer._onMessage(messages[k]);
-				} catch (e) {
-					// unpleasant - but stops this one problem
-					// event stopping an unknown number of others.
-					window.app.console.log('Exception ' + e + ' emitting event ' + messages[k]);
-				}
+
+		while (this._delayedMessages.length) {
+			var message = this._delayedMessages.shift();
+			try {
+				docLayer._onMessage(message.msg);
+			} catch (e) {
+				// unpleasant - but stops this one problem
+				// event stopping an unknown number of others.
+				window.app.console.log('Exception ' + e + ' emitting event ' + message);
 			}
 		}
+
 		this._handlingDelayedMessages = false;
 	},
 
@@ -1323,7 +1337,7 @@ app.definitions.Socket = L.Class.extend({
 			// Retry in a bit.
 			setTimeout(function() {
 				that._onStatusMsg(textMsg, command);
-			}, 100);
+			}, 10);
 			return;
 		}
 
@@ -1363,25 +1377,36 @@ app.definitions.Socket = L.Class.extend({
 				});
 			}
 
+			if (docLayer !== null) {
+				this._handleDelayedMessages(docLayer);
+			}
 			this._map._docLayer = docLayer;
 			this._map.addLayer(docLayer);
 			this._map.fire('doclayerinit');
 		}
 		else if (this._reconnecting) {
 			// we are reconnecting ...
-			this._reconnecting = false;
-			this._map._docLayer._resetClientVisArea();
-			this._map._docLayer._requestNewTiles();
-			this._map.fire('statusindicator', {statusType: 'reconnected'});
-			this._map._isNotebookbarLoadedOnCore = false;
+			this._map._docLayer._refreshTilesInBackground();
+			this._map.fire('statusindicator', { statusType: 'reconnected' });
+
+			var selectedMode = this._map.uiManager.getDarkModeState();
+			this._map.uiManager.activateDarkModeInCore(selectedMode);
+
 			var uiMode = this._map.uiManager.getCurrentMode();
-			this._map.fire('changeuimode', {mode: uiMode, force: true});
+			if (uiMode === 'notebookbar') {
+				this._map.uiManager.notebookbar.resetInCore();
+				this._map.uiManager.notebookbar.initializeInCore();
+			}
+			// close all the popups otherwise document textArea will not get focus
+			this._map.uiManager.closeAll();
 			this._map.setPermission(app.file.permission);
+			window.migrating = false;
 		}
 
 		this._map.fire('docloaded', {status: true});
 		if (this._map._docLayer) {
 			this._map._docLayer._onMessage(textMsg);
+			this._reconnecting = false;
 		}
 	},
 
@@ -1432,6 +1457,10 @@ app.definitions.Socket = L.Class.extend({
 		if (msgData.type === 'messagebox')
 			this._preProcessMessageDialog(msgData);
 
+		// appears in autofilter dropdown for hidden popups, we can ignore that
+		if (msgData.jsontype === 'popup')
+			return;
+
 		// re/create
 		if (window.mode.isMobile()) {
 			if (msgData.type == 'borderwindow')
@@ -1444,10 +1473,8 @@ app.definitions.Socket = L.Class.extend({
 				msgData.type === 'modalpopup' || msgData.type === 'snackbar') {
 				this._map.fire('mobilewizard', {data: msgData, callback: callback});
 			} else {
-				console.warn('jsdialog: unhandled mobile message');
+				console.warn('jsdialog: unhandled jsdialog mobile message: {jsontype: "' + msgData.jsontype + '", type: "' + msgData.type + '" ... }');
 			}
-		} else if (msgData.jsontype === 'autofilter') {
-			this._map.fire('autofilterdropdown', msgData);
 		} else if (msgData.jsontype === 'dialog') {
 			this._map.fire('jsdialog', {data: msgData, callback: callback});
 		} else if (msgData.jsontype === 'sidebar') {
@@ -1464,6 +1491,8 @@ app.definitions.Socket = L.Class.extend({
 					}
 				}
 			}
+		} else {
+			console.warn('Unhandled jsdialog message: {jsontype: "' + msgData.jsontype + '", type: "' + msgData.type + '" ... }');
 		}
 	},
 
@@ -1491,6 +1520,16 @@ app.definitions.Socket = L.Class.extend({
 
 	_onSocketClose: function () {
 		window.app.console.debug('_onSocketClose:');
+		if (!this._map._docLoadedOnce) {
+			var postMessageObj = {
+				errorType: 'websocketconnectionfailed',
+				success: false,
+				errorMsg: errorMessages.websocketconnectionfailed,
+				result: '',
+			};
+			this._map.fire('postMessage', {msgId: 'Action_Load_Resp', args: postMessageObj});
+			this._map.fire('error', {msg: errorMessages.websocketconnectionfailed, cmd: 'socket', kind: 'closed', id: 4});
+		}
 		if (this.ReconnectCount > 0)
 			return;
 
@@ -1501,8 +1540,15 @@ app.definitions.Socket = L.Class.extend({
 		if (this._map._docLayer) {
 			this._map._docLayer.removeAllViews();
 			this._map._docLayer._resetClientVisArea();
-			this._map._docLayer._graphicSelection = new L.LatLngBounds(new L.LatLng(0, 0), new L.LatLng(0, 0));
-			this._map._docLayer._onUpdateGraphicSelection();
+			var graphicSelection = new L.LatLngBounds(new L.LatLng(0, 0), new L.LatLng(0, 0));
+			if (!this._map._docLayer._graphicSelection.equals(graphicSelection)) {
+				this._map._docLayer._graphicSelection = graphicSelection;
+				this._map._docLayer._onUpdateGraphicSelection();
+			}
+			if (this._map._docLayer._docType === 'presentation')
+				this._map._isCursorVisible = false;
+
+			this._map._docLayer._resetCanonicalIdStatus();
 		}
 
 		if (isActive && this._reconnecting) {
@@ -1691,6 +1737,9 @@ app.definitions.Socket = L.Class.extend({
 			else if (tokens[i].startsWith('lastrow=')) {
 				command.lastrow = parseInt(tokens[i].substring(8));
 			}
+			else if (tokens[i].startsWith('readonly=')) {
+				command.readonly = parseInt(tokens[i].substring(9));
+			}
 		}
 		if (command.tileWidth && command.tileHeight && this._map._docLayer) {
 			var defaultZoom = this._map.options.zoom;
@@ -1813,6 +1862,22 @@ app.definitions.Socket = L.Class.extend({
 				pretty = textMsg.substring(0, 25);
 		}
 		return this.createCompleteTraceEvent(pretty, { message: textMsg });
+	},
+
+	manualReconnect: function(timeout) {
+		if (this._map._docLayer) {
+			this._map._docLayer.removeAllViews();
+		}
+		app.idleHandler._active = false;
+		this.close();
+		clearTimeout(this.timer);
+		setTimeout(function () {
+			try {
+				app.idleHandler._activate();
+			} catch (error) {
+				window.app.console.warn('Cannot activate map');
+			}
+		}, timeout);
 	},
 
 	threadLocalLoggingLevelToggle: false

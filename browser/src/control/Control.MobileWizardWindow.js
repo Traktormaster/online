@@ -1,5 +1,11 @@
 /* -*- js-indent-level: 8 -*- */
 /*
+ * Copyright the Collabora Online contributors.
+ *
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
+/*
  * L.Control.MobileWizardWindow - contains one unique window instance inside mobile-wizard
  */
 
@@ -244,7 +250,8 @@ L.Control.MobileWizardWindow = L.Control.extend({
 		if (!this._inBuilding)
 			history.pushState({context: 'mobile-wizard', level: this._currentDepth}, 'mobile-wizard-level-' + this._currentDepth);
 
-		var title = $(contentToShow).children('.ui-content').get(0).title;
+		var content = $(contentToShow).children('.ui-content').get(0);
+		var title = content ? content.title : '';
 
 		if (this._customTitle)
 			this._setCustomTitle(this._customTitle);
@@ -384,9 +391,6 @@ L.Control.MobileWizardWindow = L.Control.extend({
 
 	_onMobileWizard: function(data, callback) {
 		if (data) {
-			if (data.jsontype === 'autofilter' && (data.visible === 'false' || data.visible === false))
-				return;
-
 			if (data.jsontype === 'dialog' && data.action === 'close') {
 				this.parent.removeWindow(this, false);
 				return;
@@ -557,7 +561,7 @@ L.Control.MobileWizardWindow = L.Control.extend({
 				if (data.type === 'snackbar') {
 					var that = this;
 					this.isSnackBar = true;
-					this.snackBarTimout = setTimeout(function () { that.parent.removeWindow(that); }, this.options.snackbarTimeout);
+					this.snackBarTimout = setTimeout(function () { that.parent.removeWindow(that); }, data.timeout ? data.timeout : this.options.snackbarTimeout);
 				}
 			}
 
@@ -678,7 +682,7 @@ L.Control.MobileWizardWindow = L.Control.extend({
 		}
 
 		if (currentLevel) {
-			currentLevel = currentLevel.substring('level-'.length);
+			currentLevel = parseInt(currentLevel.substring('level-'.length));
 			this._builder._currentDepth = currentLevel;
 		}
 
@@ -687,6 +691,9 @@ L.Control.MobileWizardWindow = L.Control.extend({
 		parent.insertBefore(temporaryParent.firstChild, control.nextSibling);
 		var backupGridSpan = control.style.gridColumn;
 		L.DomUtil.remove(control);
+
+		// reset _builder._currentDepth
+		this._builder._currentDepth = 0;
 
 		// when we updated toolbox or menubutton with color picker we need to leave
 		// mobile wizard at the same level (opened color picker) on update

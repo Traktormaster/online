@@ -278,7 +278,7 @@ protected:
     {
         std::unique_ptr<http::Response> httpResponse = assertCheckFileInfoRequest(request);
         if (!httpResponse)
-            httpResponse = Util::make_unique<http::Response>(http::StatusCode::OK);
+            httpResponse = std::make_unique<http::Response>(http::StatusCode::OK);
 
         if (httpResponse->statusLine().statusCategory() ==
             http::StatusLine::StatusCodeClass::Successful)
@@ -309,7 +309,7 @@ protected:
 
     /// Override to set the CheckFileInfo attributes.
     virtual void configCheckFileInfo(const Poco::Net::HTTPRequest& /*request*/,
-                                     Poco::JSON::Object::Ptr /*fileInfo*/)
+                                     Poco::JSON::Object::Ptr& /*fileInfo*/)
     {
     }
 
@@ -318,7 +318,7 @@ protected:
     {
         std::unique_ptr<http::Response> httpResponse = assertGetFileRequest(request);
         if (!httpResponse)
-            httpResponse = Util::make_unique<http::Response>(http::StatusCode::OK);
+            httpResponse = std::make_unique<http::Response>(http::StatusCode::OK);
 
         if (httpResponse->statusLine().statusCategory() ==
             http::StatusLine::StatusCodeClass::Successful)
@@ -531,10 +531,7 @@ protected:
             std::ostringstream oss;
             oss << "FakeWOPIHost: " << request.getMethod() << " request URI [" << uriReq.toString()
                 << "]:\n";
-            for (const auto& pair : request)
-            {
-                oss << '\t' << pair.first << ": " << pair.second << " / ";
-            }
+            Util::joinPair(oss, request, " / ");
 
             if (UnitBase::get().isFinished())
                 oss << "\nIgnoring as test has finished";

@@ -250,7 +250,7 @@ textarea.cool-annotation-textarea {
 
 /* Related to toolbar.css */
 @-moz-document url-prefix() {
-	#formulabar #formulaInput, #formulabar #addressInput{
+	#formulabar #addressInput{
 		color: var(--color-main-text);
 		border: 1px solid var(--color-border) !important;
 		border-radius: 0px;
@@ -345,13 +345,6 @@ nav:not(.spreadsheet-color-indicator) ~ #toolbar-wrapper #toolbar-up.w2ui-toolba
 	border-color: 1px solid #808080 !important;
 }
 .w2ui-icon.equal, .w2ui-icon.autosum{width: 38px !important;}
-#formulaInput{
-	border: 1px solid #bbbbbb;
-	border-bottom: none;
-	border-top: none;
-	border-right: none;
-	height: 35px !important;
-}
 
 #calc-inputbar-wrapper {
 	display: block;
@@ -585,14 +578,6 @@ td[id^='tb_spreadsheet-toolbar_item']:focus table.w2ui-button div.w2ui-icon, td[
 	right: 0;
 }
 
-/* Related to mobilewizard.cxx */
-#mobile-wizard-header.landscape {
-	display: none;
-}
-#mobile-wizard-header.portrait {
-	display: block;
-}
-
 /* Related to mobile-wizard based menubar */
 #mobile-wizard.menuwizard.landscape #mobile-wizard-content.landscape {
 	overflow-y: auto !important;
@@ -698,7 +683,8 @@ td[id^='tb_spreadsheet-toolbar_item']:focus table.w2ui-button div.w2ui-icon, td[
 #mobile-wizard.popup:not(.snackbar) {
 	border-radius: 16px 16px 0 0;
 }
-#mobile-wizard.popup #mobile-wizard-content {
+#mobile-wizard.popup #mobile-wizard-content,
+#mobile-wizard.popup .mobile-wizard-content {
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -733,6 +719,13 @@ td[id^='tb_spreadsheet-toolbar_item']:focus table.w2ui-button div.w2ui-icon, td[
 }
 #mobile-wizard.popup.snackbar #button {
 	font-size: 14px !important;
+}
+/* Separators */
+.mobile-wizard.ui-separator {
+	/* Hide separators coming from core when on mobile
+	since we are already adding border top on every
+	#mobile-wizard .mobile-wizard.ui-text */
+	display: none;
 }
 /*   - Import text */
 #mobile-wizard-content #separatoroptions {
@@ -840,4 +833,25 @@ div#fontstyletoolbox + div#style.mobile-wizard {
 	display: flex;
 	flex-direction: row;
 	justify-content: space-between;
+}
+/* feature_lock */
+#mobile-wizard #unlock-features-popup .container {
+	flex-direction: column;
+}
+#mobile-wizard #unlock-features-popup #unlock-image {
+	max-width: 92%;
+	margin: 4%;
+	align-self: center;
+	flex: 2 1 auto;
+	height: 238px;
+	background-position: center;
+}
+#mobile-wizard #unlock-features-popup h1 {
+	font-size: 1.4em !important;
+}
+#unlock-features-popup .item ul {
+	text-shadow: none;
+	font-size: 1em !important;
+	margin-left: 5px;
+	margin-right: 5px;
 }

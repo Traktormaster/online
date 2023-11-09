@@ -29,8 +29,7 @@ else
 bin_PROGRAMS += coolwsd
 endif
 
-dist_bin_SCRIPTS = coolwsd-systemplate-setup \
-                   coolwsd-generate-proof-key
+dist_bin_SCRIPTS = coolwsd-systemplate-setup
 
 man_MANS = man/coolwsd.1 \
            man/coolforkit.1 \
@@ -38,7 +37,6 @@ man_MANS = man/coolwsd.1 \
            man/coolconfig.1 \
            man/coolstress.1 \
            man/coolwsd-systemplate-setup.1 \
-           man/coolwsd-generate-proof-key.1 \
            man/coolmount.1
 
 
@@ -117,6 +115,7 @@ shared_sources = common/FileUtil.cpp \
                  common/ConfigUtil.cpp \
                  common/Authorization.cpp \
                  common/CommandControl.cpp \
+                 common/Simd.cpp \
                  net/DelaySocket.cpp \
                  net/HttpRequest.cpp \
                  net/HttpHelper.cpp \
@@ -179,12 +178,18 @@ lokitclient_SOURCES = common/Log.cpp \
                       common/TraceEvent.cpp \
                       common/Util.cpp
 
+noinst_LIBRARIES = libsimd.a
+libsimd_a_SOURCES = kit/DeltaSimd.c
+libsimd_a_CFLAGS = @SIMD_CFLAGS@
+
 coolforkit_sources = kit/ChildSession.cpp \
                      kit/ForKit.cpp \
                      kit/Kit.cpp
 
 coolforkit_SOURCES = $(coolforkit_sources) \
                      $(shared_sources)
+
+coolforkit_LDADD = libsimd.a
 
 if ENABLE_LIBFUZZER
 coolforkit_SOURCES += \
@@ -203,6 +208,7 @@ admin_fuzzer_SOURCES = \
 		       $(common_fuzzer_sources) \
 		       fuzzer/Admin.cpp
 admin_fuzzer_LDFLAGS = -fsanitize=fuzzer $(AM_LDFLAGS)
+admin_fuzzer_LDADD = libsimd.a
 
 clientsession_fuzzer_CPPFLAGS = \
 				-DKIT_IN_PROCESS=1 \
@@ -211,6 +217,7 @@ clientsession_fuzzer_SOURCES = \
 			       $(common_fuzzer_sources) \
 			       fuzzer/ClientSession.cpp
 clientsession_fuzzer_LDFLAGS = -fsanitize=fuzzer $(AM_LDFLAGS)
+clientsession_fuzzer_LDADD = libsimd.a
 
 httpresponse_fuzzer_CPPFLAGS = \
 				-DKIT_IN_PROCESS=1 \
@@ -219,6 +226,7 @@ httpresponse_fuzzer_SOURCES = \
 			       $(common_fuzzer_sources) \
 			       fuzzer/HttpResponse.cpp
 httpresponse_fuzzer_LDFLAGS = -fsanitize=fuzzer $(AM_LDFLAGS)
+httpresponse_fuzzer_LDADD = libsimd.a
 
 httpecho_fuzzer_CPPFLAGS = \
 				-DKIT_IN_PROCESS=1 \
@@ -228,6 +236,7 @@ httpecho_fuzzer_SOURCES = \
 			       $(common_fuzzer_sources) \
 			       fuzzer/HttpEcho.cpp
 httpecho_fuzzer_LDFLAGS = -fsanitize=fuzzer $(AM_LDFLAGS)
+httpecho_fuzzer_LDADD = libsimd.a
 
 endif # ENABLE_LIBFUZZER
 
@@ -311,6 +320,7 @@ shared_headers = common/Common.hpp \
                  common/security.h \
                  common/SpookyV2.h \
                  common/CommandControl.hpp \
+                 common/Simd.hpp \
                  net/Buffer.hpp \
                  net/DelaySocket.hpp \
                  net/FakeSocket.hpp \
@@ -329,6 +339,7 @@ endif
 
 kit_headers = kit/ChildSession.hpp \
               kit/Delta.hpp \
+              kit/DeltaSimd.h \
               kit/DummyLibreOfficeKit.hpp \
               kit/Kit.hpp \
               kit/KitHelper.hpp \
@@ -398,6 +409,8 @@ else
 CLEANUP_COMMAND=if test -s ./coolwsd; then echo "Cleaning up..." && ./coolwsd --disable-cool-user-checking --cleanup --o:logging.level=trace || rm ./coolwsd; fi
 endif
 
+CLEANUP_COVERAGE=rm -rf ${abs_top_srcdir}/gcov; find . -iname "*.gc??" -delete
+
 if HAVE_LO_PATH
 
 SYSTEM_STAMP = @SYSTEMPLATE_PATH@/system_stamp
@@ -442,8 +455,7 @@ clean-local:
 	rm -rf "${top_srcdir}/loleaflet"
 	rm -rf loolconfig loolconvert loolforkit loolmap loolmount # kill old binaries
 	rm -rf loolwsd loolwsd_fuzzer coolwsd_fuzzer loolstress loolsocketdump
-	rm -rf ${abs_top_srcdir}/gcov
-	find . -iname "*.gc??" -delete
+	$(CLEANUP_COVERAGE)
 
 if ENABLE_DEBUG
 # can write to /tmp/coolwsd.log
@@ -463,7 +475,6 @@ setup-wsd: all @JAILS_PATH@
 
 COMMON_PARAMS = \
 	--o:sys_template_path="@SYSTEMPLATE_PATH@" \
-	--o:security.capabilities="$(CAPABILITIES)" \
 	--o:child_root_path="@JAILS_PATH@" --o:storage.filesystem[@allow]=true \
 	--o:ssl.cert_file_path="$(abs_top_srcdir)/etc/cert.pem" \
 	--o:ssl.key_file_path="$(abs_top_srcdir)/etc/key.pem" \
@@ -472,14 +483,16 @@ COMMON_PARAMS = \
 
 run: setup-wsd
 	./coolwsd $(COMMON_PARAMS) \
-		--o:logging.file[@enable]=${OUTPUT_TO_FILE} --o:logging.level=trace \
-		--o:trace_event[@enable]=true
+			--o:security.capabilities="$(CAPABILITIES)" \
+			--o:logging.file[@enable]=${OUTPUT_TO_FILE} --o:logging.level=trace \
+			--o:trace_event[@enable]=true
 
 if ENABLE_DEBUG
 run-one: setup-wsd
 	./coolwsd $(COMMON_PARAMS) \
-		--o:logging.file[@enable]=true --o:logging.level=trace \
-		--singlekit
+			--o:security.capabilities="$(CAPABILITIES)" \
+			--o:logging.file[@enable]=true --o:logging.level=trace \
+			--singlekit
 endif
 
 sync-writer:
@@ -492,62 +505,37 @@ sync-impress:
 	browser-sync start --config browsersync-config.js --startPath "browser/96c23f663/cool.html?file_path=file://$(abs_top_srcdir)/test/data/hello-world.odp"
 
 run-trace: setup-wsd
-	./coolwsd --o:sys_template_path="@SYSTEMPLATE_PATH@" \
-			  --o:child_root_path="@JAILS_PATH@" --o:storage.filesystem[@allow]=true \
-			  --o:ssl.cert_file_path="$(abs_top_srcdir)/etc/cert.pem" \
-			  --o:ssl.key_file_path="$(abs_top_srcdir)/etc/key.pem" \
-			  --o:ssl.ca_file_path="$(abs_top_srcdir)/etc/ca-chain.cert.pem" \
-			  --o:admin_console.username=admin --o:admin_console.password=admin \
-			  --o:logging.file[@enable]=false --o:logging.level=trace \
-                          --o:trace[@enable]=true --o:trace.path=${builddir}/trace.txt.gz \
-                          --o:trace.outgoing.record=false
+	./coolwsd $(COMMON_PARAMS) \
+			--o:logging.file[@enable]=false --o:logging.level=trace \
+			--o:trace[@enable]=true --o:trace.path=${builddir}/trace.txt.gz \
+			--o:trace.outgoing.record=false
 
 run-valgrind: setup-wsd
 	@echo "Launching coolwsd under valgrind (but not forkit/coolkit, yet)"
 	valgrind --tool=memcheck --trace-children=no -v --read-var-info=yes \
-		./coolwsd --o:sys_template_path="@SYSTEMPLATE_PATH@" \
-			  --o:child_root_path="@JAILS_PATH@" --o:storage.filesystem[@allow]=true \
-			  --o:ssl.cert_file_path="$(abs_top_srcdir)/etc/cert.pem" \
-			  --o:ssl.key_file_path="$(abs_top_srcdir)/etc/key.pem" \
-			  --o:ssl.ca_file_path="$(abs_top_srcdir)/etc/ca-chain.cert.pem" \
-			  --o:admin_console.username=admin --o:admin_console.password=admin \
-			  --o:logging.file[@enable]=false --o:logging.level=trace
+		./coolwsd $(COMMON_PARAMS) \
+			--o:logging.file[@enable]=false --o:logging.level=trace
 
 run-gdb: setup-wsd
 	@echo "Launching coolwsd under gdb"
 	$(RUN_GDB) \
-		./coolwsd --o:security.capabilities="false" \
-			  --o:sys_template_path="@SYSTEMPLATE_PATH@" \
-			  --o:child_root_path="@JAILS_PATH@" --o:storage.filesystem[@allow]=true \
-			  --o:ssl.cert_file_path="$(abs_top_srcdir)/etc/cert.pem" \
-			  --o:ssl.key_file_path="$(abs_top_srcdir)/etc/key.pem" \
-			  --o:ssl.ca_file_path="$(abs_top_srcdir)/etc/ca-chain.cert.pem" \
-			  --o:admin_console.username=admin --o:admin_console.password=admin \
-			  --o:logging.file[@enable]=false --o:logging.level=error
+		./coolwsd $(COMMON_PARAMS) \
+			--o:security.capabilities="false" \
+			--o:logging.file[@enable]=false --o:logging.level=error
 
 run-callgrind: setup-wsd
 	@echo "Launching coolwsd under valgrind's callgrind"
 	valgrind --tool=callgrind --simulate-cache=yes --dump-instr=yes --num-callers=50 --error-limit=no --trace-children=yes \
-		./coolwsd --o:security.capabilities="false" \
-			  --o:sys_template_path="@SYSTEMPLATE_PATH@" \
-			  --o:child_root_path="@JAILS_PATH@" --o:storage.filesystem[@allow]=true \
-			  --o:ssl.cert_file_path="$(abs_top_srcdir)/etc/cert.pem" \
-			  --o:ssl.key_file_path="$(abs_top_srcdir)/etc/key.pem" \
-			  --o:ssl.ca_file_path="$(abs_top_srcdir)/etc/ca-chain.cert.pem" \
-			  --o:admin_console.username=admin --o:admin_console.password=admin \
-			  --o:logging.file[@enable]=false --o:logging.level=error
+		./coolwsd $(COMMON_PARAMS) \
+			--o:security.capabilities="false" \
+			--o:logging.file[@enable]=false --o:logging.level=error
 
 run-strace: setup-wsd
 	@echo "Launching coolwsd under strace"
 	strace -o strace.log -f -tt -s 256 \
-		./coolwsd --o:security.capabilities="false" \
-			  --o:sys_template_path="@SYSTEMPLATE_PATH@" \
-			  --o:child_root_path="@JAILS_PATH@" --o:storage.filesystem[@allow]=true \
-			  --o:ssl.cert_file_path="$(abs_top_srcdir)/etc/cert.pem" \
-			  --o:ssl.key_file_path="$(abs_top_srcdir)/etc/key.pem" \
-			  --o:ssl.ca_file_path="$(abs_top_srcdir)/etc/ca-chain.cert.pem" \
-			  --o:admin_console.username=admin --o:admin_console.password=admin \
-			  --o:logging.file[@enable]=false --o:logging.level=error
+		./coolwsd $(COMMON_PARAMS) \
+			--o:security.capabilities="false" \
+			--o:logging.file[@enable]=false --o:logging.level=error
 
 else
 
@@ -646,11 +634,24 @@ else
 GEN_COVERAGE_COMMAND=true
 endif
 
-check: check-recursive
+# typically the system nss won't work in a jail and fail to init which is fatal for
+# exporting to pdf, which is something that gets tested
+check-for-system-nss:
+	@if test -e "@LO_PATH@/../config_host.mk"; then \
+		if grep -q SYSTEM_NSS=TRUE "@LO_PATH@/../config_host.mk"; then \
+			echo make check will fail unless core is configured using --without-system-nss; \
+			exit 1; \
+		fi \
+	fi
+
+check: check-for-system-nss check-recursive
 	$(GEN_COVERAGE_COMMAND)
 
 coverage-report:
 	$(GEN_COVERAGE_COMMAND)
+
+coverage-clean:
+	$(CLEANUP_COVERAGE)
 
 czech: check
 	@echo "This should do something much cooler"

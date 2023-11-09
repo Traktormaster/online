@@ -77,6 +77,7 @@ void AdminSocketHandler::handleMessage(const std::vector<char> &payload)
         std::string jwtToken;
         COOLProtocol::getTokenString(tokens[1], "jwt", jwtToken);
 
+        jwtToken = Util::decodeURIComponent(jwtToken);
         LOG_INF("Verifying JWT token: " << jwtToken);
         JWTAuth authAgent("admin", "admin", "admin");
         if (authAgent.verify(jwtToken))
@@ -169,6 +170,12 @@ void AdminSocketHandler::handleMessage(const std::vector<char> &payload)
             std::set<pid_t> pids = model.getDocumentPids();
             if (pids.find(pid) != pids.end())
             {
+                if (Admin::instance().logAdminAction())
+                {
+                    LOG_ANY("Admin request to kill document ["
+                            << COOLWSD::anonymizeUrl(model.getFilename(pid)) << "] with pid ["
+                            << pid << "] and source IPAddress [" << _clientIPAdress << ']');
+                }
                 SigUtil::killChild(pid, SIGKILL);
             }
             else
@@ -212,6 +219,11 @@ void AdminSocketHandler::handleMessage(const std::vector<char> &payload)
     else if (tokens.equals(0, "shutdown"))
     {
         LOG_INF("Setting ShutdownRequestFlag: Shutdown requested by admin.");
+        if (Admin::instance().logAdminAction())
+        {
+            LOG_ANY("Shutdown requested by admin with source IPAddress [" << _clientIPAdress
+                                                                          << ']');
+        }
         SigUtil::requestShutdown();
         return;
     }
@@ -321,6 +333,67 @@ void AdminSocketHandler::handleMessage(const std::vector<char> &payload)
             LOG_ERR("Failed to update the route token, invalid JSON parsing: " << tokens[1]);
         }
     }
+    else if (tokens.equals(0, "migrate") && tokens.size() > 1)
+    {
+        const std::string& docStatus = tokens[1];
+        const std::string& dockey = tokens[2];
+        const std::string& routeToken = tokens[3];
+        const std::string& serverId = tokens[4];
+        if (!dockey.empty() && !routeToken.empty() && !serverId.empty())
+        {
+            model.setMigratingInfo(dockey, routeToken, serverId);
+            std::ostringstream oss;
+            oss << "migrate: {";
+            oss << "\"afterSave\"" << ":false,";
+            if (docStatus == "unsaved" && !model.isDocSaved(dockey))
+            {
+                COOLWSD::autoSave(dockey);
+                oss << "\"saved\"" << ":false,";
+            }
+            else if ((docStatus == "readonly" && model.isDocReadOnly(dockey)) ||
+                     (docStatus == "saved" && model.isDocSaved(dockey)))
+            {
+                oss << "\"saved\"" << ":true,";
+            }
+            oss << "\"routeToken\"" << ':' << '"' << routeToken << '"' << ',';
+            oss << "\"serverId\"" << ':' << '"' << serverId << '"' << '}';
+            COOLWSD::alertUserInternal(dockey, oss.str());
+        }
+        else
+        {
+            LOG_WRN("Document migration failed for dockey:" + dockey +
+                        ", reason has been changed");
+        }
+    }
+    else if (tokens.equals(0, "wopiSrcMap"))
+    {
+        sendTextFrame(model.getWopiSrcMap());
+    }
+    else if(tokens.equals(0, "verifyauth"))
+    {
+        if (tokens.size() < 2)
+        {
+            LOG_DBG("Auth command without any token");
+            sendTextFrame("InvalidAuthToken");
+        }
+        std::string jwtToken, id;
+        COOLProtocol::getTokenString(tokens[1], "jwt", jwtToken);
+        COOLProtocol::getTokenString(tokens[2], "id", id);
+
+        jwtToken = Util::decodeURIComponent(jwtToken);
+        LOG_INF("Verifying JWT token: " << jwtToken);
+        JWTAuth authAgent("admin", "admin", "admin");
+        if (authAgent.verify(jwtToken))
+        {
+            LOG_TRC("JWT token is valid");
+            sendTextFrame("ValidAuthToken " + id);
+        }
+        else
+        {
+            LOG_DBG("Invalid auth token");
+            sendTextFrame("InvalidAuthToken " + id);
+        }
+    }
 }
 
 AdminSocketHandler::AdminSocketHandler(Admin* adminManager,
@@ -332,6 +405,7 @@ AdminSocketHandler::AdminSocketHandler(Admin* adminManager,
 {
     // Different session id pool for admin sessions (?)
     _sessionId = Util::decodeId(COOLWSD::GetConnectionId());
+    _clientIPAdress = socket.lock()->clientAddress();
 }
 
 AdminSocketHandler::AdminSocketHandler(Admin* adminManager)
@@ -453,7 +527,7 @@ void Admin::pollingThread()
     std::chrono::steady_clock::time_point lastNet = lastCPU;
     std::chrono::steady_clock::time_point lastCleanup = lastCPU;
 
-    while (!isStop() && !SigUtil::getTerminationFlag() && !SigUtil::getShutdownRequestFlag())
+    while (!isStop() && !SigUtil::getShutdownRequestFlag())
     {
         const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
 
@@ -559,9 +633,11 @@ void Admin::uploadedAlert(const std::string& dockey, pid_t pid, bool value)
 
 void Admin::addDoc(const std::string& docKey, pid_t pid, const std::string& filename,
                    const std::string& sessionId, const std::string& userName, const std::string& userId,
-                   const int smapsFD, const Poco::URI& wopiSrc)
+                   const int smapsFD, const std::string& wopiSrc, bool readOnly)
 {
-    addCallback([=] { _model.addDocument(docKey, pid, filename, sessionId, userName, userId, smapsFD, wopiSrc); });
+    addCallback([=] {
+        _model.addDocument(docKey, pid, filename, sessionId, userName, userId, smapsFD, Poco::URI(wopiSrc), readOnly);
+    });
 }
 
 void Admin::rmDoc(const std::string& docKey, const std::string& sessionId)
@@ -919,14 +995,14 @@ void MonitorSocketHandler::onDisconnect()
 {
     bool reconnect = false;
     // schedule monitor reconnect only if monitor uri exist in configuration
-    for (std::string uri : Admin::instance().getMonitorList())
+    for (const auto& monitor : Admin::instance().getMonitorList())
     {
         const std::string uriWithoutParam = _uri.substr(0, _uri.find('?'));
-        if (Util::iequal(uri, uriWithoutParam))
+        if (Util::iequal(monitor.first, uriWithoutParam))
         {
-            LOG_ERR("Monitor " << _uri << " dis-connected, re-trying in 20 seconds");
-            Admin::instance().scheduleMonitorConnect(_uri, std::chrono::steady_clock::now() +
-                                                               std::chrono::seconds(20));
+            LOG_ERR("Monitor " << _uri << " dis-connected, re-trying in " << monitor.second  << " seconds");
+            Admin::instance().scheduleMonitorConnect(
+                _uri, std::chrono::steady_clock::now() + std::chrono::seconds(monitor.second));
             Admin::instance().deleteMonitorSocket(uriWithoutParam);
             reconnect = true;
             break;
@@ -947,6 +1023,10 @@ void Admin::connectToMonitorSync(const std::string &uri)
     }
 
     LOG_TRC("Add monitor " << uri);
+    if (COOLWSD::getConfigValue<bool>("admin_console.logging.monitor_connect", true))
+    {
+        LOG_ANY("Connected to remote monitor with uri [" << uriWithoutParam << ']');
+    }
     auto handler = std::make_shared<MonitorSocketHandler>(this, uri);
     _monitorSockets.insert({uriWithoutParam, handler});
     insertNewWebSocketSync(Poco::URI(uri), handler);
@@ -985,6 +1065,12 @@ void Admin::sendMetrics(const std::shared_ptr<StreamSocket>& socket, const std::
     getMetrics(oss);
     socket->send(oss.str());
     socket->shutdown();
+    bool skipAuthentication = COOLWSD::getConfigValue<bool>("security.enable_metrics_unauthenticated", false);
+    bool showLog = COOLWSD::getConfigValue<bool>("admin_console.logging.metrics_fetch", true);
+    if (!skipAuthentication && showLog)
+    {
+        LOG_ANY("Metrics endpoint has been accessed by source IPAddress [" << socket->clientAddress() << ']');
+    }
 }
 
 void Admin::start()
@@ -993,21 +1079,22 @@ void Admin::start()
     startThread();
 }
 
-std::vector<std::string> Admin::getMonitorList()
+std::vector<std::pair<std::string, int>> Admin::getMonitorList()
 {
     const auto& config = Application::instance().config();
-    std::vector<std::string> monitorList;
+    std::vector<std::pair<std::string, int>> monitorList;
     for (size_t i = 0;; ++i)
     {
         const std::string path = "monitors.monitor[" + std::to_string(i) + ']';
         const std::string uri = config.getString(path, "");
+        const auto retryInterval = COOLWSD::getConfigValue<int>(path + "[@retryInterval]", 20);
         if (!config.has(path))
             break;
         if (!uri.empty())
         {
             Poco::URI monitor(uri);
             if (monitor.getScheme() == "wss" || monitor.getScheme() == "ws")
-                monitorList.push_back(uri);
+                monitorList.push_back(std::make_pair(uri, retryInterval));
             else
                 LOG_ERR("Unhandled monitor URI: '" << uri << "' should be \"wss://foo:1234/baa\"");
         }
@@ -1018,12 +1105,12 @@ std::vector<std::string> Admin::getMonitorList()
 void Admin::startMonitors()
 {
     bool haveMonitors = false;
-    for (std::string uri : getMonitorList())
+    for (const auto& monitor : getMonitorList())
     {
         addCallback(
             [=]
             {
-                scheduleMonitorConnect(uri + "?ServerId=" + Util::getProcessIdentifier(),
+                scheduleMonitorConnect(monitor.first + "?ServerId=" + Util::getProcessIdentifier(),
                                        std::chrono::steady_clock::now());
             });
         haveMonitors = true;
@@ -1033,7 +1120,7 @@ void Admin::startMonitors()
         LOG_TRC("No monitors configured.");
 }
 
-void Admin::updateMonitors(std::vector<std::string>& oldMonitors)
+void Admin::updateMonitors(std::vector<std::pair<std::string,int>>& oldMonitors)
 {
     if (oldMonitors.empty())
     {
@@ -1042,21 +1129,21 @@ void Admin::updateMonitors(std::vector<std::string>& oldMonitors)
     }
 
     std::unordered_map<std::string, bool> currentMonitorMap;
-    for (std::string uri : getMonitorList())
+    for (const auto& monitor : getMonitorList())
     {
-        currentMonitorMap[uri] = true;
+        currentMonitorMap[monitor.first] = true;
     }
 
     // shutdown monitors which doesnot not exist in currentMonitorMap
-    for (std::string uri : oldMonitors)
+    for (const auto& monitor : oldMonitors)
     {
-        if (!currentMonitorMap[uri])
+        if (!currentMonitorMap[monitor.first])
         {
-            auto socketHandler = _monitorSockets[uri];
+            auto socketHandler = _monitorSockets[monitor.first];
             if (socketHandler != nullptr)
             {
                 socketHandler->shutdown();
-                _monitorSockets.erase(uri);
+                _monitorSockets.erase(monitor.first);
             }
         }
     }

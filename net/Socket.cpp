@@ -8,6 +8,7 @@
 #include <config.h>
 
 #include "Socket.hpp"
+#include "Util.hpp"
 
 #include <cstring>
 #include <ctype.h>
@@ -368,7 +369,7 @@ int SocketPoll::poll(int64_t timeoutMaxMicroS)
 #if !MOBILEAPP
         int dump[32];
         dump[0] = ::read(_wakeup[0], &dump, sizeof(dump));
-        LOG_TRC("Wakup pipe read " << dump[0] << " bytes");
+        LOG_TRC("Wakeup pipe read " << dump[0] << " bytes");
 #else
         LOG_TRC("Wakeup pipe read");
         int dump = fakeSocketRead(_wakeup[0], &dump, sizeof(dump));
@@ -487,7 +488,8 @@ int SocketPoll::poll(int64_t timeoutMaxMicroS)
 
         if (!toErase.empty())
         {
-            LOG_TRC("Removing " << toErase.size() << " socket" << (toErase.size() > 1 ? "s" : ""));
+            LOG_TRC("Removing " << toErase.size() << " socket" << (toErase.size() > 1 ? "s" : "")
+                                << " of " << _pollSockets.size() << " total");
             LOG_ASSERT(_pollSockets.size() > 0);
             LOG_ASSERT(toErase.size() <= _pollSockets.size());
             std::sort(toErase.begin(), toErase.end(), [](int a, int b) { return a > b; });
@@ -577,10 +579,15 @@ bool SocketPoll::insertNewUnixSocket(
     const std::string &location,
     const std::string &pathAndQuery,
     const std::shared_ptr<WebSocketHandler>& websocketHandler,
-    const int shareFD)
+    const std::vector<int>* shareFDs)
 {
     LOG_DBG("Connecting to local UDS " << location);
     const int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    if (fd < 0)
+    {
+        LOG_SYS("Failed to connect to unix socket at " << location);
+        return false;
+    }
 
     struct sockaddr_un addrunix;
     std::memset(&addrunix, 0, sizeof(addrunix));
@@ -593,7 +600,7 @@ bool SocketPoll::insertNewUnixSocket(
     memcpy(&addrunix.sun_path[1], location.c_str(), location.length());
 
     const int res = connect(fd, (const struct sockaddr*)&addrunix, sizeof(addrunix));
-    if (fd < 0 || (res < 0 && errno != EINPROGRESS))
+    if (res < 0 && errno != EINPROGRESS)
     {
         LOG_SYS("Failed to connect to unix socket at " << location);
         ::close(fd);
@@ -620,7 +627,7 @@ bool SocketPoll::insertNewUnixSocket(
     req.set("Pragma", "no-cache");
 
     LOG_TRC("Requesting upgrade of websocket at path " << pathAndQuery << " #" << socket->getFD());
-    if (shareFD == -1)
+    if (!shareFDs || shareFDs->empty())
     {
         socket->send(req);
     }
@@ -628,7 +635,7 @@ bool SocketPoll::insertNewUnixSocket(
     {
         Buffer buf;
         req.writeData(buf, INT_MAX); // Write the whole request.
-        socket->sendFD(buf.getBlock(), buf.getBlockSize(), shareFD);
+        socket->sendFDs(buf.getBlock(), buf.getBlockSize(), *shareFDs);
     }
 
     std::static_pointer_cast<ProtocolHandlerInterface>(websocketHandler)->onConnect(socket);
@@ -680,6 +687,8 @@ void ServerSocket::dumpState(std::ostream& os)
 
 void SocketDisposition::execute()
 {
+    LOG_TRC("Executing SocketDisposition of #" << _socket->getFD() << ": " << name(_disposition));
+
     // We should have hard ownership of this socket.
     ASSERT_CORRECT_SOCKET_THREAD(_socket);
     if (_socketMove)
@@ -725,11 +734,10 @@ void StreamSocket::dumpState(std::ostream& os)
 {
     int64_t timeoutMaxMicroS = SocketPoll::DefaultPollTimeoutMicroS.count();
     const int events = getPollEvents(std::chrono::steady_clock::now(), timeoutMaxMicroS);
-    os << '\t' << getFD() << '\t' << events << '\t'
-       << (ignoringInput() ? "ignore\t" : "process\t")
-       << _inBuffer.size() << '\t' << _outBuffer.size() << '\t'
-       << " r: " << _bytesRecvd << "\t w: " << _bytesSent << '\t'
-       << clientAddress() << '\t';
+    os << '\t' << std::setw(6) << getFD() << "\t0x" << std::hex << events << std::dec << '\t'
+       << (ignoringInput() ? "ignore\t" : "process\t") << std::setw(6) << _inBuffer.size() << '\t'
+       << std::setw(6) << _outBuffer.size() << '\t' << " r: " << std::setw(6) << _bytesRecvd
+       << "\t w: " << std::setw(6) << _bytesSent << '\t' << clientAddress() << '\t';
     _socketHandler->dumpState(os);
     if (_inBuffer.size() > 0)
         Util::dumpHex(os, _inBuffer, "\t\tinBuffer:\n", "\t\t");
@@ -790,13 +798,17 @@ bool StreamSocket::sendAndShutdown(http::Response& response)
 void SocketPoll::dumpState(std::ostream& os) const
 {
     // FIXME: NOT thread-safe! _pollSockets is modified from the polling thread!
+    const auto pollSockets = _pollSockets;
+
     os << "\n  SocketPoll:";
-    os << "\n    Poll [" << _pollSockets.size() << "] - wakeup r: "
-       << _wakeup[0] << " w: " << _wakeup[1] << '\n';
-    if (_newCallbacks.size() > 0)
-        os << "\tcallbacks: " << _newCallbacks.size() << '\n';
-    os << "\tfd\tevents\trsize\twsize\n";
-    for (const auto &i : _pollSockets)
+    os << "\n    Poll [" << name() << "] with " << pollSockets.size() << " socket"
+       << (pollSockets.size() == 1 ? "" : "s") << " - wakeup rfd: " << _wakeup[0]
+       << " wfd: " << _wakeup[1] << '\n';
+    const auto callbacks = _newCallbacks.size();
+    if (callbacks > 0)
+        os << "\tcallbacks: " << callbacks << '\n';
+    os << "\t    fd\tevents\trbuffered\twbuffered\trtotal\twtotal\tclientaddress\n";
+    for (const auto& i : pollSockets)
         i->dumpState(os);
 }
 
@@ -809,7 +821,8 @@ bool ServerSocket::bind(Type type, int port)
     //TODO: Might be worth refactoring out.
     const int reuseAddress = 1;
     constexpr unsigned int len = sizeof(reuseAddress);
-    ::setsockopt(getFD(), SOL_SOCKET, SO_REUSEADDR, &reuseAddress, len);
+    if (::setsockopt(getFD(), SOL_SOCKET, SO_REUSEADDR, &reuseAddress, len) == -1)
+        LOG_SYS("Failed setsockopt SO_REUSEADDR: " << strerror(errno));
 
     int rc;
 
@@ -1100,9 +1113,9 @@ LocalServerSocket::~LocalServerSocket()
 bool StreamSocket::parseHeader(const char *clientName,
                                Poco::MemoryInputStream &message,
                                Poco::Net::HTTPRequest &request,
-                               MessageMap *map)
+                               MessageMap& map)
 {
-    assert(!map || (map->_headerSize == 0 && map->_messageSize == 0));
+    assert(map._headerSize == 0 && map._messageSize == 0);
 
     // Find the end of the header, if any.
     static const std::string marker("\r\n\r\n");
@@ -1116,25 +1129,16 @@ bool StreamSocket::parseHeader(const char *clientName,
 
     // Skip the marker.
     itBody += marker.size();
-    if (map) // a reasonable guess so far
-    {
-        map->_headerSize = static_cast<size_t>(itBody - _inBuffer.begin());
-        map->_messageSize = map->_headerSize;
-    }
+    map._headerSize = static_cast<size_t>(itBody - _inBuffer.begin());
+    map._messageSize = map._headerSize;
 
     try
     {
         request.read(message);
 
-        LOG_INF('#' << getFD() << ": " << clientName << " HTTP Request: " << request.getMethod()
-                    << ' ' << request.getURI() << ' ' << request.getVersion() <<
-                [&](auto& log)
-                {
-                    for (const auto& it : request)
-                    {
-                        log << " / " << it.first << ": " << it.second;
-                    }
-                });
+        LOG_INF(clientName << " HTTP Request: " << request.getMethod() << ' ' << request.getURI()
+                           << ' ' << request.getVersion() << ' '
+                           << [&](auto& log) { Util::joinPair(log, request, " / "); });
 
         const std::streamsize contentLength = request.getContentLength();
         const auto offset = itBody - _inBuffer.begin();
@@ -1146,8 +1150,7 @@ bool StreamSocket::parseHeader(const char *clientName,
                                                               << ", available: " << available);
             return false;
         }
-        if (map)
-            map->_messageSize += contentLength;
+        map._messageSize += contentLength;
 
         const std::string expect = request.get("Expect", "");
         const bool getExpectContinue = Util::iequal(expect, "100-continue");
@@ -1163,8 +1166,7 @@ bool StreamSocket::parseHeader(const char *clientName,
         if (request.getChunkedTransferEncoding())
         {
             // keep the header
-            if (map)
-                map->_spans.push_back(std::pair<size_t, size_t>(0, itBody - _inBuffer.begin()));
+            map._spans.push_back(std::pair<size_t, size_t>(0, itBody - _inBuffer.begin()));
 
             int chunk = 0;
             while (itBody != _inBuffer.end())
@@ -1200,7 +1202,7 @@ bool StreamSocket::parseHeader(const char *clientName,
 
                 if (chunkLen == 0) // we're complete.
                 {
-                    map->_messageSize = chunkOffset;
+                    map._messageSize = chunkOffset;
                     return true;
                 }
 
@@ -1213,7 +1215,7 @@ bool StreamSocket::parseHeader(const char *clientName,
                 }
                 itBody += chunkLen;
 
-                map->_spans.push_back(std::pair<size_t,size_t>(chunkOffset, chunkLen));
+                map._spans.push_back(std::pair<size_t,size_t>(chunkOffset, chunkLen));
 
                 if (*itBody != '\r' || *(itBody + 1) != '\n')
                 {
@@ -1253,18 +1255,17 @@ bool StreamSocket::parseHeader(const char *clientName,
     return true;
 }
 
-bool StreamSocket::compactChunks(MessageMap *map)
+bool StreamSocket::compactChunks(MessageMap& map)
 {
-    assert (map);
-    if (!map->_spans.size())
+    if (!map._spans.size())
         return false; // single message.
 
-    LOG_CHUNK("Pre-compact " << map->_spans.size() << " chunks: \n" <<
+    LOG_CHUNK("Pre-compact " << map._spans.size() << " chunks: \n" <<
               Util::dumpHex("", "", _inBuffer.begin(), _inBuffer.end(), false));
 
     char *first = &_inBuffer[0];
     char *dest = first;
-    for (auto &span : map->_spans)
+    for (const auto &span : map._spans)
     {
         std::memmove(dest, &_inBuffer[span.first], span.second);
         dest += span.second;
@@ -1272,14 +1273,14 @@ bool StreamSocket::compactChunks(MessageMap *map)
 
     // Erase the duplicate bits.
     size_t newEnd = dest - first;
-    size_t gap = map->_messageSize - newEnd;
-    _inBuffer.erase(_inBuffer.begin() + newEnd, _inBuffer.begin() + map->_messageSize);
+    size_t gap = map._messageSize - newEnd;
+    _inBuffer.erase(_inBuffer.begin() + newEnd, _inBuffer.begin() + map._messageSize);
 
-    LOG_CHUNK("Post-compact with erase of " << newEnd << " to " << map->_messageSize << " giving: \n" <<
+    LOG_CHUNK("Post-compact with erase of " << newEnd << " to " << map._messageSize << " giving: \n" <<
               Util::dumpHex("", "", _inBuffer.begin(), _inBuffer.end(), false));
 
     // shrink our size to fit
-    map->_messageSize -= gap;
+    map._messageSize -= gap;
 
 #if ENABLE_DEBUG
     std::ostringstream oss;

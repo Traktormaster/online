@@ -11,9 +11,10 @@
 #include <memory>
 #include <queue>
 #include <thread>
+#include <condition_variable>
+#include <fstream>
 #include <unordered_map>
 #include <vector>
-#include <common/SpookyV2.h>
 
 #include "Png.hpp"
 #include "Delta.hpp"
@@ -40,6 +41,7 @@ public:
 #elif MOBILEAPP && !defined(GTKAPP)
         maxConcurrency = std::max<int>(std::thread::hardware_concurrency(), 2);
 #else
+        // coverity[tainted_return_value] - we trust the contents of this variable
         const char *max = getenv("MAX_CONCURRENCY");
         if (max)
             maxConcurrency = atoi(max);
@@ -48,7 +50,10 @@ public:
         for (int i = 1; i < maxConcurrency; ++i)
             _threads.push_back(std::thread(&ThreadPool::work, this));
     }
-    ~ThreadPool()
+
+    ~ThreadPool() { stop(); }
+
+    void stop()
     {
         {
             std::unique_lock< std::mutex > lock(_mutex);
@@ -56,7 +61,7 @@ public:
             _shutdown = true;
         }
         _cond.notify_all();
-        for (auto &it : _threads)
+        for (auto& it : _threads)
             it.join();
     }
 
@@ -119,7 +124,7 @@ public:
         while (!_shutdown)
         {
             _cond.wait(lock);
-            if (!_shutdown && !_work.empty())
+            while (!_shutdown && !_work.empty())
                 runOne(lock);
         }
     }
@@ -169,11 +174,19 @@ namespace RenderTiles
         renderedTiles.back().setImgSize(imgSize);
     }
 
+    // FIXME: we should perhaps increment only on a plausible edit
+    static TileWireId getCurrentWireId(bool increment = false)
+    {
+        static TileWireId nextId = 0;
+        if (increment)
+            nextId++;
+        return nextId;
+    }
+
     bool doRender(std::shared_ptr<lok::Document> document,
                   DeltaGenerator &deltaGen,
                   TileCombined &tileCombined,
                   ThreadPool &pngPool,
-                  bool combined,
                   const std::function<void (unsigned char *data,
                                             int offsetX, int offsetY,
                                             size_t pixmapWidth, size_t pixmapHeight,
@@ -218,7 +231,6 @@ namespace RenderTiles
         const int pixelWidth = tileCombined.getWidth();
         const int pixelHeight = tileCombined.getHeight();
         assert (pixelWidth > 0 && pixelHeight > 0);
-        assert (pixelWidth <= 256 && pixelHeight <= 256);
         const size_t pixmapWidth = tilesByX * pixelWidth;
         const size_t pixmapHeight = tilesByY * pixelHeight;
 
@@ -278,9 +290,8 @@ namespace RenderTiles
             // FIXME: prettify this.
             bool forceKeyframe = tiles[tileIndex].getOldWireId() == 0;
 
-            // FIXME: we should perhaps increment only on a plausible edit
-            static TileWireId nextId = 0;
-            TileWireId wireId = ++nextId;
+            // FIXME: share the same wireId for all tiles concurrently rendered.
+            TileWireId wireId = getCurrentWireId(true);
 
             bool skipCompress = false;
             if (!skipCompress)
@@ -302,6 +313,7 @@ namespace RenderTiles
                         {
                             // Can we create a delta ?
                             LOG_TRC("Compress new tile #" << tileIndex);
+                            assert(pixelWidth <= 256 && pixelHeight <= 256);
                             deltaGen.compressOrDelta(pixmap.data(), offsetX, offsetY,
                                                      pixelWidth, pixelHeight,
                                                      pixmapWidth, pixmapHeight,
@@ -350,15 +362,14 @@ namespace RenderTiles
             return false;
 
         std::string tileMsg;
-        if (combined)
+        if (tileCombined.getCombined())
         {
             tileMsg = tileCombined.serialize("tilecombine:", "\n", renderedTiles);
 
             LOG_TRC("Sending back painted tiles for " << tileMsg << " of size " << output.size() << " bytes) for: " << tileMsg);
 
-            std::unique_ptr<char[]> response;
             const size_t responseSize = tileMsg.size() + output.size();
-            response.reset(new char[responseSize]);
+            std::unique_ptr<char[]> response(std::make_unique<char[]>(responseSize));
             std::copy(tileMsg.begin(), tileMsg.end(), response.get());
             std::copy(output.begin(), output.end(), response.get() + tileMsg.size());
             outputMessage(response.get(), responseSize);
@@ -370,8 +381,7 @@ namespace RenderTiles
             {
                 tileMsg = i.serialize("tile:", "\n");
                 const size_t responseSize = tileMsg.size() + i.getImgSize();
-                std::unique_ptr<char[]> response;
-                response.reset(new char[responseSize]);
+                std::unique_ptr<char[]> response(std::make_unique<char[]>(responseSize));
                 std::copy(tileMsg.begin(), tileMsg.end(), response.get());
                 std::copy(output.begin() + outputOffset, output.begin() + outputOffset + i.getImgSize(), response.get() + tileMsg.size());
                 outputMessage(response.get(), responseSize);

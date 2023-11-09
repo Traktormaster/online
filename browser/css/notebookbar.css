@@ -20,11 +20,16 @@ button.ui-tab.notebookbar {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	padding: 0px 1em;
+	padding: 0 clamp(4px, 1vw, 1em);
 	border: 1px solid transparent;
 	border-radius: var(--border-radius);
 	background-color: transparent;
-	font-size: var(--header-font-size);
+	/* calc([minimum size]
+	   + ([maximum size] - [minimum size])
+	   * ((100vw - [minimum viewport width]) / ([maximum viewport width] - [minimum viewport width]))); */
+	font-size: calc(var(--tb-min-fs) + (var(--tb-max-fs-u) - var(--tb-min-fs-u)) * ((100vw - 640px) / (1000 - 640)));
+	/* a minimum value, a preferred value or scaler, and a maximum allowed value. */
+	font-size: clamp(var(--tb-min-fs), var(--tb-fs-s), var(--tb-max-fs));
 	font-family: var(--cool-font);
 	line-height: normal;
 	color: var(--color-main-text);
@@ -97,7 +102,7 @@ button.ui-tab.notebookbar {
 	padding: 0 2px;
 }
 
-#Save.savemodified:after {
+#save.savemodified:after {
 	content: '';
 	display: block;
 	width: 4px;
@@ -331,6 +336,11 @@ button.ui-tab.notebookbar {
 	float: inline-start;
 }
 
+/* adding focus to tab in notebookbar */
+.ui-tab.selected.notebookbar.add-focus-to-tab {
+	border: 2px solid black !important
+}
+
 /* unobuttons with inline labels */
 
 .inline.notebookbar {
@@ -369,16 +379,13 @@ button.ui-tab.notebookbar {
 	height: 24px !important;
 }
 
-#fontsize.notebookbar .select2.select2-container {
+#fontsize.notebookbar {
 	width: 65px !important;
 }
 
-#fontnamecombobox.notebookbar .select2 {
+#fontnamecombobox.notebookbar {
 	width: 195px !important;
 	top: -1px;
-}
-
-#fontnamecombobox.notebookbar {
 	padding-right: 0px;
 }
 
@@ -390,20 +397,12 @@ button.ui-tab.notebookbar {
 	margin-left: 0px !important;
 }
 
-#fontsizecombobox.notebookbar .select2 {
+#fontsizecombobox.notebookbar {
 	width: 50px !important;
 }
 
-#applystyle.notebookbar .select2 {
-	width: 170px !important;
-}
-
-.notebookbar.ui-combobox > .select2 * {
+.notebookbar.ui-combobox * {
 	line-height: 22px;
-}
-
-.notebookbar.ui-combobox > .select2 .select2-selection__arrow {
-	height: 22px;
 }
 
 /* Styles preview */
@@ -475,7 +474,7 @@ button.ui-tab.notebookbar {
 
 /* Home tab */
 
-#numbertype .select2.select2-container {
+#numbertype {
 	width: 170px !important;
 }
 

@@ -41,11 +41,6 @@
 	min-width: 400px;
 }
 
-img.ui-drawing-area {
-	width: -webkit-fill-available;
-	width: -moz-available;
-}
-
 .jsdialog.one-child-popup {
 	border: 0;
 	margin: 0 !important;
@@ -78,9 +73,28 @@ img.ui-drawing-area {
 }
 
 .jsdialog-container .ui-dialog-content {
+	max-height: calc( 90vh - 34px);
+	overflow-y: auto !important;
 	background-color: var(--color-background-lighter) !important;
 	font-family: var(--jquery-ui-font);
 	line-height: 1.5;
+}
+
+#SortKeyWindow {
+	/* As used in .jsdialog-container .ui-dialog-content 90 % of the viewport
+	   minus 352px:
+		- 34px the dialog's header
+		- 112px the next sibling
+		- 50px the dialog's buttons
+		- 80px status bar and calc sheet bar
+		- 38px formulabar
+		- 38px document-header
+   */
+	max-height: calc( 90vh - 352px);
+}
+
+.jsdialog-container .ui-dialog-content > div:not(.ui-scrollwindow) {
+	overflow: hidden; /* don't inherit scrollbar from parent */
 }
 
 .jsdialog-container .lokdialog.ui-dialog-content.ui-widget-content {
@@ -116,21 +130,6 @@ img.ui-drawing-area {
 	box-shadow: 0 0 3px var(--color-border-darker);
 	border-radius: var(--border-radius);
 	background: var(--color-background-darker);
-}
-
-.jsdialog.ui-separator.vertical {
-	height: 100%;
-	padding-right: 6px;
-	/* border-right: 1px dashed #888; */
-	background-image: linear-gradient(#888 22%, rgba(255,255,255,0) 0%);
-	background-position: right center;
-	background-size: 1px 14px;
-	background-repeat: repeat-y;
-	box-shadow: inset 0 34px 0 0 white;
-}
-
-.jsdialog.ui-separator.horizontal {
-	padding-bottom: 6px;
 }
 
 .jsdialog.row {
@@ -206,10 +205,33 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 	max-height: 500px;
 	max-width: 700px;
 }
+/* - Also used in SpellingDialog where suggestion come in form
+     of an image*/
+.jsdialog.ui-scrollwindow.has-ui-drawing-area {
+	width: max-content;
+}
 
 /* AccessibilityCheckDialog hack to prevent huge height in Firefox */
 #AccessibilityCheckDialog .cell {
 	vertical-align: unset !important;
+}
+
+/* Separator */
+
+.jsdialog.ui-separator.vertical {
+	height: 100%;
+	padding-right: 6px;
+	/* border-right: 1px dashed #888; */
+	background-image: linear-gradient(#888 22%, rgba(255,255,255,0) 0%);
+	background-position: right center;
+	background-size: 1px 14px;
+	background-repeat: repeat-y;
+	box-shadow: inset 0 34px 0 0 white;
+}
+
+.jsdialog.ui-separator.horizontal {
+	width: 100%;
+	margin: 0px;
 }
 
 /* Tabs */
@@ -285,7 +307,8 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 }
 
 .ui-expander-label::before,
-.ui-treeview-expandable.collapsed > .ui-treeview-expander::before {
+.ui-treeview-expandable.collapsed > .ui-treeview-expander::before,
+.ui-treeview tr[aria-expanded='false'] > td > .ui-treeview-expander::before {
 	display: inline-block;
 	content: 'V';
 	color: transparent;
@@ -295,7 +318,8 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 }
 
 .ui-expander-label.expanded::before,
-.ui-treeview-expandable:not(.collapsed) > .ui-treeview-expander::before  {
+.ui-treeview-expandable:not(.collapsed) > .ui-treeview-expander::before,
+.ui-treeview tr[aria-expanded='true'] > td > .ui-treeview-expander::before  {
 	content: 'V';
 	color: transparent;
 	margin-inline-end: 7px;
@@ -305,14 +329,17 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 }
 
 [data-theme='dark'] .ui-expander-label::before,
-[data-theme='dark'] .ui-treeview-expandable > .ui-treeview-expander::before  {
+[data-theme='dark'] .ui-treeview-expandable > .ui-treeview-expander::before,
+[data-theme='dark'] .ui-treeview tr[aria-expanded] > td > .ui-treeview-expander::before  {
 	filter: brightness(1);
 }
 
-.ui-treeview-expandable > .ui-treeview-expander::before {
+.ui-treeview-expandable > .ui-treeview-expander::before,
+.ui-treeview tr[aria-expanded] > td > .ui-treeview-expander::before {
 	margin-inline-end: 7px !important;
 	display: inline-block;
 	position: relative !important;
+	cursor: pointer;
 }
 
 .ui-treeview-header-sort-icon::after {
@@ -334,6 +361,7 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 	height: var(--btn-size);
 	width: var(--btn-size);
 	margin-inline-end: 8px;
+	vertical-align: middle;
 }
 
 .ui-expander-label.expanded {
@@ -365,6 +393,7 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 	overflow-y: auto;
 	overflow-x: hidden;
 	max-width: 1000px;
+	min-width: 150px;
 	padding: 1px;
 	padding-inline-end: 3px;
 }
@@ -383,7 +412,11 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 	min-height: 100px;
 	min-width: 100px;
 	max-height: 150px;
-	width: 100%;
+	width: max-content;
+}
+
+.ui-treeview.empty .ui-treeview-body {
+	color: var(--color-text-lighter);
 }
 
 .ui-treeview-cell.with-sub-dialog {
@@ -429,9 +462,17 @@ input[type='checkbox'].autofilter, .jsdialog input[type='checkbox'] {
 	margin: 1px 8px;
 }
 
+[data-theme='dark'] input[type='checkbox'].autofilter, [data-theme='dark'] .jsdialog input[type='checkbox'] {
+	background: url('images/dark/lc_checkboxoff.svg') no-repeat center;
+}
+
 input[type='checkbox']:checked.autofilter, .jsdialog input[type='checkbox']:checked {
 	border-color: transparent;
 	background-image: url('images/lc_checkbox.svg');
+}
+
+[data-theme='dark'] input[type='checkbox']:checked.autofilter, [data-theme='dark'] .jsdialog input[type='checkbox']:checked {
+	background-image: url('images/dark/lc_checkbox.svg');
 }
 
 .ui-treeview-entry span {
@@ -442,6 +483,10 @@ input[type='checkbox']:checked.autofilter, .jsdialog input[type='checkbox']:chec
 	line-height: 40px;
 	padding-left: 10px;
 	padding-right: 10px;
+}
+
+.ui-treeview .ui-listview-entry td {
+	vertical-align: middle;
 }
 
 .ui-treeview-entry.selected,
@@ -472,6 +517,38 @@ input[type='checkbox']:checked.autofilter, .jsdialog input[type='checkbox']:chec
 .ui-treeview.droptarget:hover{
 	border: 1px solid #888;
 	box-shadow: 0 0 2px 0 #777;
+}
+
+/* tree grid */
+
+.ui-treeview tr[aria-level='2'] > td:first-child {
+	padding-left: 2.5ch;
+}
+
+.ui-treeview tr[aria-level='3'] > td:first-child {
+	padding-left: 5ch;
+}
+
+.ui-treeview tr[aria-level='4'] > td:first-child {
+	padding-left: 7.5ch;
+}
+
+.ui-treeview tr[aria-level='5'] > td:first-child {
+	padding-left: 10ch;
+}
+
+.ui-treeview tr > td:first-child .ui-treeview-expander {
+	display: inline-block;
+	vertical-align: top;
+}
+
+.ui-treeview tr[aria-level]:not([aria-expanded]) > td:first-child::before {
+	font-family: monospace;
+	content: 'V';
+	color: transparent;
+	display: inline-block;
+	margin-inline-end: 7px;
+	vertical-align: top;
 }
 
 /* context menu */
@@ -508,6 +585,7 @@ input[type='checkbox']:checked.autofilter, .jsdialog input[type='checkbox']:chec
 	border-radius: var(--border-radius);
 	overflow: hidden;
 	align-self: center;
+	padding-inline: 4px;
 }
 
 #search_edit.ui-edit.autofilter {
@@ -563,6 +641,10 @@ input[type='checkbox']:checked.autofilter, .jsdialog input[type='checkbox']:chec
 /* text label */
 
 .ui-dialog-content .jsdialog.ui-text {
+	padding-inline-start: 0;
+}
+
+.jsdialog.ui-text {
 	padding-inline-start: 8px;
 }
 
@@ -575,7 +657,7 @@ input[type='checkbox']:checked.autofilter, .jsdialog input[type='checkbox']:chec
 	color: var(--color-text-dark);
 }
 
-.spinfieldcontainer input:hover {
+.spinfieldcontainer input:not([disabled]):hover {
 	border: 1px solid var(--color-border-darker);
 	color: var(--color-text-darker);
 	background-color: var(--color-background-lighter);
@@ -615,12 +697,19 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	cursor: pointer;
 }
 /* listbox */
-.jsdialog.ui-listbox-container {
+.ui-listbox-container,
+.ui-combobox {
 	display: flex;
 	margin: auto 0;
 }
 
-.jsdialog.ui-listbox {
+.ui-listbox {
+	padding: 0 14px 0 4px;
+	border: 1px solid var(--color-border-dark);
+}
+
+.ui-listbox,
+.ui-combobox {
 	box-sizing: border-box;
 	-webkit-appearance: none;
 	-moz-appearance: none;
@@ -631,9 +720,7 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	line-height: normal;
 	font-size: var(--default-font-size);
 	font-family: var(--jquery-ui-font);
-	border: 1px solid var(--color-border-dark);
 	border-radius: var(--border-radius);
-	padding: 0 14px 0 4px;
 	background-color: var(--color-background-dark);
 	color: var(--color-text-dark);
 }
@@ -669,14 +756,116 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	background: url('images/jquery-ui-lightness/ui-icons_ffffff_256x240.png') no-repeat transparent;
 }
 
-.ui-listbox[disabled='disabled'] ~ .ui-listbox-arrow {
+.ui-listbox[disabled='disabled'] ~ .ui-listbox-arrow,
+.ui-combobox[disabled='disabled'] ~ .ui-listbox-arrow {
 	opacity: 0.5;
 	cursor: auto;
 }
 
+/* ui-combobox */
+.ui-combobox {
+	border: 1px solid var(--color-border);
+}
+
+.ui-combobox-content {
+	width: 100%;
+	border: none;
+	border-radius: var(--border-radius);
+	color: var(--color-text-dark);
+	background-color: var(--color-background-lighter);
+}
+
+.ui-combobox-button {
+	padding-left: 20px;
+	border-left: 1px solid var(--color-border);
+}
+
+.ui-combobox-dropdown {
+	position: absolute;
+	z-index: 2001;
+	padding: 0px;
+	overflow-y: auto;
+	max-height: 500px;
+	background-color: var(--color-background-dark);
+	border: 1px solid var(--color-border-dark);
+	border-radius: var(--border-radius);
+}
+
+.modalpopup[id$='-dropdown'] .ui-dialog-content {
+	padding: 0px;
+}
+
+.modalpopup[id$='-dropdown'] .ui-grid {
+	grid-gap: 0px;
+}
+
+.ui-combobox-entry {
+	width: calc(100% + 15px); /* + padding for scrollbar */
+}
+
+.ui-combobox-entry span:hover {
+	border: 1px solid var(--color-border-darker);
+	background-color: var(--color-background-darker);
+}
+
+.ui-combobox-entry.selected span:not(:hover) {
+	border: 1px solid var(--color-primary);
+	background-color: var(--color-primary);
+	color: var(--color-primary-text);
+}
+
+.ui-combobox-entry span {
+	border: 1px solid transparent;
+	padding: 5px;
+	display: block;
+	width: 100%;
+	font-size: var(--default-font-size);
+	font-family: var(--jquery-ui-font);
+	color: var(--color-text-dark);
+}
+
+.ui-combobox-entry img {
+	border: 1px solid transparent;
+	max-height: 24px; /* required for hidpi*/
+}
+
+.ui-combobox-entry img:hover {
+	border: 1px solid var(--color-border-darker);
+	filter: contrast(0.5);
+}
+
+.ui-combobox-entry.selected img:not(:hover) {
+	border: 1px solid var(--color-primary);
+}
+
+[data-theme='dark'] .ui-combobox-entry img {
+	filter: invert(1);
+}
+
+.ui-combobox-entry.ui-has-menu {
+	display: grid;
+	grid-template-columns: 1fr 25px;
+	align-items: center;
+}
+
+.ui-combobox-entry.ui-has-menu::after {
+	content: '>';
+	display: inline-block;
+	width: 25px;
+}
+
+/* Apply style always show real colors */
+#applystyle-dropdown .ui-dialog-content {
+	background-color: white !important;
+}
+
+#applystyle-dropdown .ui-combobox-entry img {
+	filter: none !important;
+	max-height: 30px; /* hidpi, avoid blurry text */
+}
+
 /* ui-textarea */
 .jsdialog.ui-textarea {
-	max-width: 400px;
 	color: var(--color-text-dark);
 	background-color: var(--color-background-dark);
 	border: 1px solid var(--color-border-dark);
@@ -781,6 +970,11 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	background: url('images/lc_checkbox.svg') no-repeat center;
 }
 
+[data-theme='dark'] #mobile-wizard #toggle_all.checkbutton + #select_current,
+.autofilter-container #select_current {
+	background: url('images/dark/lc_checkbox.svg') no-repeat center;
+}
+
 .autofilter-container #select_current {
 	/* Same size as #toggle_all.checkbutton > input */
 	height: 18px;
@@ -792,6 +986,11 @@ input[type='number']:hover::-webkit-outer-spin-button {
 #mobile-wizard #toggle_all.checkbutton + #select_current + #unselect_current,
 .autofilter-container #unselect_current {
 	background: url('images/lc_checkboxoff.svg') no-repeat center;
+}
+
+[data-theme='dark'] #mobile-wizard #toggle_all.checkbutton + #select_current + #unselect_current,
+.autofilter-container #unselect_current {
+	background: url('images/dark/lc_checkboxoff.svg') no-repeat center;
 }
 
 .autofilter-container #unselect_current {
@@ -961,7 +1160,7 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	margin-left: 3px;
 }
 
-.unoarrow:hover, .menubutton .arrow:hover {
+.unoarrow:not([disabled]):hover, .menubutton .arrow:not([disabled]):hover {
 	border-top: 5px solid var(--color-text-darker);
 }
 
@@ -978,7 +1177,7 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	background-color: transparent;
 }
 
-.unoarrow:hover, .arrowbackground:hover .unoarrow {
+.unoarrow:not([disabled]):hover, .arrowbackground:not([disabled]):hover .unoarrow {
 	border-top-color: var(--color-text-darker);
 }
 
@@ -1007,6 +1206,15 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	display: table-cell !important;
 	float: right;
 	margin: 5px 0px 5px 5px;
+}
+
+.jsdialog.menubutton[disabled] {
+	background-color: var(--color-background-lighter) !important;
+	color: var(--color-text-lighter) !important;
+}
+
+.jsdialog.menubutton[disabled] .arrow {
+	border-top-color: var(--color-text-lighter);
 }
 
 /* sum button in formulabar */
@@ -1236,12 +1444,32 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	stop-opacity: 0.2;
 }
 
+/* progressbar */
+.ui-progressbar {
+	display: flex;
+	align-items: center;
+}
+
+.ui-progressbar progress {
+	width: 100%;
+}
+
+.snackbar .ui-progressbar progress {
+	min-width: 120px;
+	margin-right: 10px;
+}
+
 /* snackbar */
 .snackbar {
 	border: none !important;
 }
 .snackbar.jsdialog-window {
 	overflow: visible;
+}
+.snackbar #snackbar-container,
+.snackbar #snackbar-container-progress {
+	align-items: center;
+	max-width: calc(80vw);
 }
 #mobile-wizard.popup.snackbar,
 .snackbar.jsdialog-container .ui-dialog-content {
@@ -1287,7 +1515,17 @@ input[type='number']:hover::-webkit-outer-spin-button {
 }
 
 .snackbar.jsdialog-container #button.ui-pushbutton.jsdialog {
-	padding-right: 0;
+	padding: 8px;
+}
+
+#snackbar-container-progress .ui-progressbar {
+	display: grid;
+	grid-column: 1 / 3;
+}
+
+#snackbar-container-progress {
+	grid-template-rows: repeat(2, auto);
+	grid-template-columns: repeat(2, auto);
 }
 
 #mobile-wizard.popup.snackbar #button,
@@ -1354,18 +1592,67 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	margin: auto;
 }
 
+/* Writer - Insert - Page Number - page preview image */
+[data-theme='dark'] #PageNumberDialog #previewImage {
+	filter: invert(.95)
+}
+
+/* Writer - Table of Contents, Index or Bibliography dialog, Columns tab */
+[data-theme='dark'] #ColumnPage #pageexample-img, #ColumnPage #valueset-img {
+	filter: invert(.9)
+}
+
+
 /* formulabar */
 #sc_input_window.formulabar {
 	height: 28px;
 	border: 1px solid var(--color-border);
 	flex-grow: 1;
-	resize: none !important;
-	max-width: unset !important;
-	font-size: calc(var(--default-font-size)*1.2) !important;
-	line-height: 1.2;
-	color: var(--color-main-text);
 	background-color: var(--color-background-lighter);
 	border-radius: var(--border-radius) 0 0 var(--border-radius);
+}
+
+.ui-custom-textarea {
+	overflow: auto;
+	display: grid;
+}
+
+.ui-custom-textarea.focused {
+	border: 1px solid var(--color-primary) !important;
+}
+
+.ui-custom-textarea,
+.ui-custom-textarea-cursor-layer,
+.ui-custom-textarea-text-layer {
+	font-family: monospace;
+	line-height: 1.2;
+	font-size: calc(var(--default-font-size)*1.2) !important;
+	color: var(--color-main-text);
+	overflow-wrap: anywhere;
+}
+
+.ui-custom-textarea-cursor-layer,
+.ui-custom-textarea-text-layer {
+	padding: 4px;
+	grid-column: 1;
+	grid-row: 1;
+	white-space: pre-wrap;
+	text-wrap: wrap;
+}
+
+.ui-custom-textarea-cursor-layer {
+	color: transparent;
+	pointer-events: none;
+}
+
+.ui-custom-textarea.focused .ui-custom-textarea-cursor-layer span.cursor:not(.hidden) {
+	border-left: 1px solid black;
+	margin-left: -1px;
+}
+
+.ui-custom-textarea-cursor-layer span.selection:not(.hidden) {
+	background-color: var(--color-primary-darker);
+	color: var(--color-primary-text);
 }
 
 #sc_input_window.formulabar:focus {
@@ -1437,10 +1724,10 @@ input[type='number']:hover::-webkit-outer-spin-button {
 }
 
 /* hover effect */
-.jsdialog.menubutton:hover,
-.jsdialog.ui-listbox:hover,
-.jsdialog.ui-edit:hover,
-.jsdialog.ui-textarea:hover {
+.jsdialog.menubutton:not([disabled]):hover,
+.ui-listbox:not([disabled]):hover,
+.jsdialog.ui-edit:not([disabled]):hover,
+.jsdialog.ui-textarea:not([disabled]):hover {
 	color: var(--color-text-darker);
 	background-color: var(--color-background-lighter);
 	border: 1px solid var(--color-border-darker);
@@ -1471,3 +1758,112 @@ div [id^='TemplateDialog'] {
 #CharacterPropertiesDialog {
 	min-width: 656px;
 }
+
+/* Keyboard input keys */
+kbd,
+.kbd {
+	background-color: var(--color-background-dark);
+	border-radius: var(--border-radius);
+	border: 1px solid var(--color-border-dark);
+	color: var(--color-text-dark);
+	display: inline-block;
+	font-family: monospace;
+	font-size: .85em;
+	line-height: 1;
+	padding: 4px;
+	white-space: nowrap;
+}
+
+.kbd--plus {
+	color: var(--color-text-dark);
+	padding: 0 4px;
+	font-size: 0.85em;
+}
+
+.warn-copy-paste {
+	width: 100%;
+}
+
+/* manage changes dialog */
+
+.jsdialog #writerchanges .ui-treeview-body {
+	min-height: 300px;
+}
+
+/* Insert hyperlink dialog */
+
+#HyperlinkInternetPage #grid2,
+#HyperlinkInternetPage #label2,
+#HyperlinkInternetPage #lbProtocol,
+#HyperlinkInternetPage #linktyp_ftp,
+#HyperlinkInternetPage #linktyp_internet {
+	display: none;
+}
+
+/* feature_lock */
+#modal-dialog-unlock-features-popup {
+	width: 652px;
+	min-width: auto;
+	max-width: none;
+}
+#unlock-features-popup .container {
+	display: flex;
+	flex-direction: row;
+}
+#unlock-features-popup #unlock-image {
+	flex: 1.3;
+	background: transparent no-repeat left 4px /contain;
+	background-image: none;
+	height: 288px;
+	margin-inline-end: 0.5em;
+}
+#unlock-features-popup .item {
+	flex: 1;
+}
+#unlock-features-popup .item *:not(ul, li) {
+	margin-inline-start: 1.1em;
+}
+#unlock-features-popup .item ul {
+	list-style: none;
+	padding: 0;
+	font-size: 0.84em;
+	text-shadow: 1px 1px 12px #ffbf0038, 0 0 0.5px #00000026;
+}
+#unlock-features-popup h1 {
+	margin-bottom: .5em;
+	font-size: 1.1em;
+	color: #fda208;
+}
+#unlock-features-popup ul {
+	list-style: none;
+	padding: 0;
+	font-size: 0.84em;
+	text-shadow: 1px 1px 12px #ffbf0038, 0 0 0.5px #00000026;
+}
+
+#unlock-features-popup ul li {
+	display: flex;
+	justify-content: flex-start;
+	align-items: flex-start;
+}
+
+#unlock-features-popup ul li::before {
+	content: '\2022';
+	color: #fda208;
+	font-weight: bold;
+	display: inline-block;
+	width: 1em;
+	min-width: 1em;
+	margin-inline-start: 0.5em;
+}
+
+/* clipboard warning dialog */
+#modal-dialog-copy_paste_download_progress .ui-dialog-content {
+	width: 450px;
+}
+
+/* help */
+#modal-dialog-online-help-content-box {
+	min-width: 75%;
+}
+

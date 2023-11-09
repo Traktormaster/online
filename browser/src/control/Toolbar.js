@@ -3,7 +3,7 @@
  * Toolbar handler
  */
 
-/* global app $ window sanitizeUrl brandProductName brandProductURL _ */
+/* global app $ window sanitizeUrl brandProductName brandProductURL _ w2ui */
 L.Map.include({
 
 	// a mapping of uno commands to more readable toolbar items
@@ -246,12 +246,12 @@ L.Map.include({
 			'options=' + options);
 	},
 
-	print: function () {
+	print: function (options) {
 		if (window.ThisIsTheiOSApp || window.ThisIsTheAndroidApp) {
 			window.postMobileMessage('PRINT');
 		} else {
 			this.showBusy(_('Downloading...'), false);
-			this.downloadAs('print.pdf', 'pdf', null, 'print');
+			this.downloadAs('print.pdf', 'pdf', options, 'print');
 		}
 	},
 
@@ -370,7 +370,8 @@ L.Map.include({
 		if (this.isPermissionEditForComments()) {
 			allowedCommands.push('.uno:InsertAnnotation','.uno:DeleteCommentThread', '.uno:DeleteAnnotation', '.uno:DeleteNote',
 				'.uno:DeleteComment', '.uno:ReplyComment', '.uno:ReplyToAnnotation', '.uno:ResolveComment',
-				'.uno:ResolveCommentThread', '.uno:ResolveComment', '.uno:EditAnnotation', '.uno:ExportToEPUB', '.uno:ExportToPDF');
+				'.uno:ResolveCommentThread', '.uno:ResolveComment', '.uno:EditAnnotation', '.uno:ExportToEPUB', '.uno:ExportToPDF',
+				'.uno:ExportDirectToPDF');
 		}
 
 		for (var i in allowedCommands) {
@@ -428,8 +429,8 @@ L.Map.include({
 	onHelpOpen: function(id, map, productName) {
 		var i;
 		// Display keyboard shortcut or online help
-		if (id === 'keyboard-shortcuts') {
-			document.getElementById('online-help').style.display='none';
+		if (id === 'keyboard-shortcuts-content') {
+			document.getElementById('online-help-content').style.display='none';
 			// Display help according to document opened
 			if (map.getDocType() === 'text') {
 				document.getElementById('text-shortcuts').style.display='block';
@@ -444,9 +445,9 @@ L.Map.include({
 				document.getElementById('drawing-shortcuts').style.display='block';
 			}
 		} else /* id === 'online-help' */ {
-			document.getElementById('keyboard-shortcuts').style.display='none';
+			document.getElementById('keyboard-shortcuts-content').style.display='none';
 			if (window.socketProxy) {
-				var helpdiv = document.getElementById('online-help');
+				var helpdiv = document.getElementById('online-help-content');
 				var imgList = helpdiv.querySelectorAll('img');
 				for (var p = 0; p < imgList.length; p++) {
 					var imgSrc = imgList[p].src;
@@ -519,25 +520,26 @@ L.Map.include({
 		}
 
 		//translatable screenshots
-		var supportedLanguage = ['fr', 'it', 'de', 'es', 'pt-BR'];
+		var supportedLanguage = ['de', 'fr', 'it', 'es', 'pt-BR'];
 		var currentLanguage = String.locale;
 		if (supportedLanguage.indexOf(currentLanguage) >= 0) {
-			translatableContent = $(contentElement.querySelectorAll('.screenshot')).querySelectorAll('img');
+			translatableContent = $(contentElement.querySelectorAll('.screenshot img'));
+
 			for (i = 0, max = translatableContent.length; i < max; i++) {
 				translatableContent[i].src = translatableContent[i].src.replace('/en/', '/'+currentLanguage+'/');
 			}
 		}
 
 		// Substitute %productName in Online Help and replace special Mac key names
-		if (id === 'online-help') {
+		if (id === 'online-help-content') {
 			var productNameContent = contentElement.querySelectorAll('span.productname');
 			for (i = 0, max = productNameContent.length; i < max; i++) {
 				productNameContent[i].innerHTML = productNameContent[i].innerHTML.replace(/%productName/g, productName);
 			}
-			document.getElementById('online-help').innerHTML = L.Util.replaceCtrlAltInMac(document.getElementById('online-help').innerHTML);
+			document.getElementById('online-help-content').innerHTML = L.Util.replaceCtrlAltInMac(document.getElementById('online-help-content').innerHTML);
 		}
-		if (id === 'keyboard-shortcuts') {
-			document.getElementById('keyboard-shortcuts').innerHTML = L.Util.replaceCtrlAltInMac(document.getElementById('keyboard-shortcuts').innerHTML);
+		if (id === 'keyboard-shortcuts-content') {
+			document.getElementById('keyboard-shortcuts-content').innerHTML = L.Util.replaceCtrlAltInMac(document.getElementById('keyboard-shortcuts-content').innerHTML);
 		}
 	},
 
@@ -656,10 +658,79 @@ L.Map.include({
 		box.insertBefore(innerDiv, box.firstChild);
 		innerDiv.innerHTML = content.outerHTML;
 
-		var form = document.getElementById('modal-dialog-about-dialog-box');
+		var form = document.getElementById('about-dialog-box');
+
 		form.addEventListener('click', this.aboutDialogClickHandler.bind(this));
 		form.addEventListener('keyup', this.aboutDialogKeyHandler.bind(this));
 		form.querySelector('#coolwsd-version').querySelector('a').focus();
+		var copyversion = L.DomUtil.create('button', 'ui-pushbutton jsdialog', null);
+		copyversion.setAttribute('id', 'modal-dialog-about-dialog-box-copybutton');
+		copyversion.setAttribute('title', _('Copy all version information in English'));
+		var img = L.DomUtil.create('img', null, null);
+		L.LOUtil.setImage(img, 'lc_copy.svg', this._docLayer._docType);
+		copyversion.innerHTML = '<img src="' + img.src +'" width="18px" height="18px">';
+		copyversion.addEventListener('click', this.copyVersionInfoToClipboard.bind(this));
+		map.uiManager.enableTooltip(copyversion);
+		var aboutok = document.getElementById('modal-dialog-about-dialog-box-yesbutton');
+		if (aboutok) {
+			aboutok.before(copyversion);
+		}
+	},
+
+	getVersionInfoFromClass: function(className) {
+		var versionElement = document.getElementById(className);
+		var versionInfo = versionElement.innerText;
+
+		var gitHashIndex = versionInfo.indexOf('git hash');
+		if (gitHashIndex > -1) {
+		  versionInfo = versionInfo.slice(0, gitHashIndex) + '(' + versionInfo.slice(gitHashIndex) + ')';
+		}
+
+		return versionInfo;
+	},
+
+	copyVersionInfoToClipboard: function() {
+		var text = 'COOLWSD version: ' + this.getVersionInfoFromClass('coolwsd-version') + '\n';
+		text += 'LOKit version: ' + this.getVersionInfoFromClass('lokit-version') + '\n';
+		text += 'Served by: ' + document.getElementById('os-info').innerText + '\n';
+		text += 'Server ID: ' + document.getElementById('coolwsd-id').innerText + '\n';
+
+		if (navigator.clipboard && window.isSecureContext) {
+			navigator.clipboard.writeText(text)
+			.then(function() {
+				window.console.log('Text copied to clipboard');
+				this.contentHasBeenCopiedShowSnackbar();
+			}.bind(this))
+			.catch(function(error) {
+				window.console.error('Error copying text to clipboard:', error);
+			});
+		} else {
+			var textArea = document.createElement('textarea');
+			textArea.style.position = 'absolute';
+			textArea.style.opacity = 0;
+			textArea.value = text;
+			document.body.appendChild(textArea);
+			textArea.select();
+			try {
+				document.execCommand('copy');
+				window.console.log('Text copied to clipboard');
+				this.contentHasBeenCopiedShowSnackbar();
+			} catch (error) {
+				window.console.error('Error copying text to clipboard:', error);
+			} finally {
+				document.body.removeChild(textArea);
+			}
+		}
+	},
+
+	contentHasBeenCopiedShowSnackbar: function() {
+		var timeout = 1000;
+		this.uiManager.showSnackbar('Version information has been copied', null, null, timeout);
+		var copybutton = document.querySelector('#modal-dialog-about-dialog-box-copybutton > img');
+		L.LOUtil.setImage(copybutton, 'lc_clipboard-check.svg', this._docLayer._docType);
+		setTimeout(function () {
+			L.LOUtil.setImage(copybutton, 'lc_copy.svg', this._docLayer._docType);
+		}.bind(this), timeout);
 	},
 
 	extractContent: function(html) {
@@ -769,12 +840,53 @@ L.Map.include({
 	},
 
 	showHyperlinkDialog: function() {
+		if (this.getDocType() === 'spreadsheet') {
+			// show native core dialog
+			// in case we try to edit email EditHyperlink doesn't work
+			this.sendUnoCommand('.uno:HyperlinkDialog');
+			return;
+		}
+
 		var text = this.getTextForLink();
 		var link = '';
 		if (this.hyperlinkUnderCursor && this.hyperlinkUnderCursor.link)
 			link = this.hyperlinkUnderCursor.link;
 
 		this._createAndRunHyperlinkDialog(text ? text.trim() : '', link);
+	},
+
+	cancelSearch: function() {
+		var toolbar = window.mode.isMobile() ? w2ui['searchbar'] : w2ui['actionbar'];
+		var searchInput = L.DomUtil.get('search-input');
+		this.resetSelection();
+		toolbar.hide('cancelsearch');
+		toolbar.disable('searchprev');
+		toolbar.disable('searchnext');
+		searchInput.value = '';
+		if (window.mode.isMobile()) {
+			searchInput.focus();
+			// odd, but on mobile we need to invoke it twice
+			toolbar.hide('cancelsearch');
+		}
+
+		this._onGotFocus();
+	},
+
+	preventKeyboardPopup: function (id) {
+		// In the iOS app we don't want clicking on the toolbar to pop up the keyboard.
+		if (!window.ThisIsTheiOSApp && id !== 'zoomin' && id !== 'zoomout' && id !== 'mobile_wizard' && id !== 'insertion_mobile_wizard') {
+			this.focus(this.canAcceptKeyboardInput()); // Maintain same keyboard state.
+		}
+	},
+
+	// used in onClick method of w2ui toolbar
+	executeUnoAction: function (item) {
+		if (item.unosheet && this.getDocType() === 'spreadsheet') {
+			this.toggleCommandState(item.unosheet);
+		}
+		else {
+			this.toggleCommandState(window.getUNOCommand(item.uno));
+		}
 	},
 
 	openRevisionHistory: function () {
@@ -805,6 +917,21 @@ L.Map.include({
 	formulabarSetDirty: function() {
 		if (this.formulabar)
 			this.formulabar.dirty = true;
+	},
+
+	setAccessibilityState: function(enable) {
+		if (this._accessibilityState === enable)
+			return;
+		this._accessibilityState = enable;
+		app.socket.sendMessage('a11ystate ' + enable);
+
+		this.removeLayer(this._textInput);
+		this._textInput = enable ? L.a11yTextInput() : L.textInput();
+		this.addLayer(this._textInput);
+		if (enable) {
+			this._textInput._requestFocusedParagraph();
+		}
+		this._textInput.showCursor();
 	},
 
 	// map.dispatch() will be used to call some actions so we can share the code
@@ -921,6 +1048,16 @@ L.Map.include({
 				});
 			}
 			break;
+		case 'exportdirectpdf':
+			{
+				this.sendUnoCommand('.uno:ExportDirectToPDF', {
+					'SynchronMode': {
+						'type': 'boolean',
+						'value': false
+					}
+				});
+			}
+			break;
 		case 'exportepub':
 			{
 				this.sendUnoCommand('.uno:ExportToEPUB', {
@@ -971,6 +1108,36 @@ L.Map.include({
 			break;
 		case 'toggledarktheme':
 			this.uiManager.toggleDarkMode();
+			break;
+		case 'home-search':
+			this.uiManager.focusSearch();
+			break;
+		case 'renamedocument':
+			this.uiManager.renameDocument();
+			break;
+		case 'print-active-sheet':
+			this.sendUnoCommand('.uno:DeletePrintArea');
+			var currentSheet = this._docLayer._selectedPart + 1;
+			var options  = {
+				ExportFormFields: {
+					type: 'boolean',
+					value: false
+				},
+				ExportNotes: {
+					type: 'boolean',
+					value: false
+				},
+				SheetRange: {
+					type: 'string',
+					value: currentSheet + '-' + currentSheet
+				}
+			};
+			options = JSON.stringify(options);
+			this.print(options);
+			break;
+		case 'print-all-sheets':
+			this.sendUnoCommand('.uno:DeletePrintArea');
+			this.print();
 			break;
 		default:
 			console.error('unknown dispatch: "' + action + '"');

@@ -89,20 +89,6 @@ L.ImpressTileLayer = L.CanvasTileLayer.extend({
 			map._docPreviews = {};
 
 		map.uiManager.initializeSpecializedUI(this._docType);
-		if (window.mode.isMobile()) {
-			L.Control.MobileWizard.mergeOptions({maxHeight: '55vh'});
-			var mobileWizard = L.DomUtil.get('mobile-wizard');
-			var container = L.DomUtil.createWithId('div', 'mobile-wizard-header', mobileWizard);
-			var preview = L.DomUtil.createWithId('div', 'mobile-slide-sorter', container);
-			L.DomUtil.toBack(container);
-			map.addControl(L.control.partsPreview(container, preview, {
-				fetchThumbnail: false,
-				allowOrientation: false,
-				axis: 'x',
-				imageClass: 'preview-img-portrait',
-				frameClass: 'preview-frame-portrait'
-			}));
-		}
 	},
 
 	onResizeImpress: function () {
@@ -169,6 +155,8 @@ L.ImpressTileLayer = L.CanvasTileLayer.extend({
 		}
 	},
 
+	// TODO: shre code with WriterTileLayer
+	/* jscpd:ignore-start */
 	_onInvalidateTilesMsg: function (textMsg) {
 		var command = app.socket.parseServerCmd(textMsg);
 		if (command.x === undefined || command.y === undefined || command.part === undefined) {
@@ -197,24 +185,12 @@ L.ImpressTileLayer = L.CanvasTileLayer.extend({
 		for (var key in this._tiles) {
 			var coords = this._tiles[key].coords;
 			var bounds = this._coordsToTileBounds(coords);
-			if (coords.part === command.part && invalidBounds.intersects(bounds) &&
-				coords.mode === command.mode) {
-				if (this._tiles[key]._invalidCount) {
-					this._tiles[key]._invalidCount += 1;
-				}
-				else {
-					this._tiles[key]._invalidCount = 1;
-				}
+			if (coords.part === command.part && coords.mode === command.mode &&
+			    invalidBounds.intersects(bounds)) {
 				if (visibleArea.intersects(bounds)) {
 					needsNewTiles = true;
-					if (this._debug) {
-						this._debugAddInvalidationData(this._tiles[key]);
-					}
 				}
-				else if (!app.file.fileBasedView || !this._tiles[key].current) {
-					// tile outside of the visible area, just remove it
-					this._removeTile(key);
-				}
+				this._invalidateTile(key, command.wireId);
 			}
 		}
 
@@ -240,6 +216,7 @@ L.ImpressTileLayer = L.CanvasTileLayer.extend({
 		clearTimeout(this._previewInvalidator);
 		this._previewInvalidator = setTimeout(L.bind(this._invalidatePreviews, this), this.options.previewInvalidationTimeout);
 	},
+	/* jscpd:ignore-end */
 
 	_onSetPartMsg: function (textMsg) {
 		var part = parseInt(textMsg.match(/\d+/g)[0]);
@@ -278,9 +255,13 @@ L.ImpressTileLayer = L.CanvasTileLayer.extend({
 			this._updateMaxBounds(true);
 			this._documentInfo = textMsg;
 			this._viewId = parseInt(command.viewid);
-			this._selectedPart = command.selectedPart;
+			if (app.socket._reconnecting) {
+				app.socket.sendMessage('setclientpart part=' + this._selectedPart);
+			} else {
+				this._selectedPart = command.selectedPart;
+				this._selectedParts = command.selectedParts || [command.selectedPart];
+			}
 			this._selectedMode = (command.mode !== undefined) ? command.mode : 0;
-			this._selectedParts = command.selectedParts || [command.selectedPart];
 			this._resetPreFetching(true);
 			this._update();
 			var partMatch = textMsg.match(/[^\r\n]+/g);

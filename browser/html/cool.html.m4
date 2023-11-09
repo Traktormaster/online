@@ -54,6 +54,7 @@ m4_ifelse(MOBILEAPP,[],
     if (msg.MessageId === 'Host_PostmessageReady') {
       window.WOPIPostmessageReady = true;
       window.removeEventListener('message', PostMessageReadyListener, false);
+      console.log('Received Host_PostmessageReady.');
     }
   };
   window.addEventListener('message', PostMessageReadyListener, false);
@@ -234,7 +235,7 @@ m4_ifelse(MOBILEAPP,[true],
       </div>
 
       <div id="userListHeader">
-        <div id="userListSummary"></div>
+        <button id="userListSummary"></button>
         <div id="userListPopover"></div>
       </div>
 
@@ -368,7 +369,7 @@ m4_ifelse(MOBILEAPP,[true],
       window.userInterfaceMode = '%USER_INTERFACE_MODE%';
       window.useIntegrationTheme = '%USE_INTEGRATION_THEME%';
       window.enableMacrosExecution = '%ENABLE_MACROS_EXECUTION%';
-      window.enableAccessibility = '%ENABLE_ACCESSIBILITY%';
+      window.enableAccessibility = '%ENABLE_ACCESSIBILITY%' === 'true';
       window.outOfFocusTimeoutSecs = %OUT_OF_FOCUS_TIMEOUT_SECS%;
       window.idleTimeoutSecs = %IDLE_TIMEOUT_SECS%;
       window.protocolDebug = %PROTOCOL_DEBUG%;
@@ -404,6 +405,10 @@ m4_ifelse(IOSAPP,[true],
 m4_ifelse(ANDROIDAPP,[true],
      [window.userInterfaceMode = window.getParameterByName('userinterfacemode');])
 
+m4_ifelse(ANDROIDAPP,[true],
+     [var darkTheme = window.getParameterByName('darkTheme');
+      if (darkTheme) {window.uiDefaults = {'darkTheme': true};}])
+
 m4_ifelse(EMSCRIPTENAPP,[true],
      [window.userInterfaceMode = 'notebookbar';])
 
@@ -415,7 +420,7 @@ var brandingLink = document.createElement('link');
 brandingLink.setAttribute("rel", "stylesheet");
 brandingLink.setAttribute("type", "text/css");
 
-var theme_name = document.getElementsByName("theme")[[0]] ? document.getElementsByName("theme")[[0]].value : '';
+var theme_name = '%BRANDING_THEME%';
 var theme_prefix = '';
 if(window.useIntegrationTheme === 'true' && theme_name !== '') {
     theme_prefix = theme_name + '/';

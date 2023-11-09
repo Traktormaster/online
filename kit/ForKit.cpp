@@ -33,6 +33,7 @@
 #include "Kit.hpp"
 #include "SetupKitEnvironment.hpp"
 #include <Log.hpp>
+#include <Simd.hpp>
 #include <Unit.hpp>
 #include <Util.hpp>
 #include <WebSocketHandler.hpp>
@@ -46,6 +47,7 @@
 #include <common/SigUtil.hpp>
 #include <common/security.h>
 #include <common/ConfigUtil.hpp>
+#include <kit/DeltaSimd.h>
 
 #ifndef KIT_IN_PROCESS
 static bool NoCapsForKit = false;
@@ -296,6 +298,20 @@ static void cleanupChildren()
         const auto it = childJails.find(exitedChildPid);
         if (it != childJails.end())
         {
+            if (WIFSIGNALED(status) && (WTERMSIG(status) == SIGSEGV ||
+                                        WTERMSIG(status) == SIGBUS ||
+                                        WTERMSIG(status) == SIGABRT))
+            {
+                ++segFaultCount;
+
+                std::string noteCrashFile(it->second + "/tmp/kit-crashed");
+                int noteCrashFD = open(noteCrashFile.c_str(), O_CREAT | O_TRUNC | O_WRONLY, S_IRUSR | S_IWUSR);
+                if (noteCrashFD < 0)
+                    LOG_ERR("Couldn't create file: " << noteCrashFile << " due to error: " << strerror(errno));
+                else
+                    close(noteCrashFD);
+            }
+
             LOG_INF("Child " << exitedChildPid << " has exited, will remove its jail [" << it->second << "].");
             cleanupJailPaths.emplace_back(it->second);
             childJails.erase(it);
@@ -303,11 +319,6 @@ static void cleanupChildren()
             {
                 // We ran out of kits and we aren't terminating.
                 LOG_WRN("No live Kits exist, and we are not terminating yet.");
-            }
-
-            if (WIFSIGNALED(status) && (WTERMSIG(status) == SIGSEGV || WTERMSIG(status) == SIGBUS))
-            {
-                ++segFaultCount;
             }
         }
         else
@@ -355,6 +366,17 @@ static void cleanupChildren()
     while (i-- > 0)
     {
         const std::string path = cleanupJailPaths[i];
+
+        // don't delete jails where there was a crash until it ~3 minutes old
+        std::string noteCrashFile(path + "/tmp/kit-crashed");
+        auto noteStat = FileUtil::Stat(noteCrashFile);
+        if (noteStat.good())
+        {
+            time_t modifiedTimeSec = noteStat.modifiedTimeMs() / 1000;
+            if (time(nullptr) < modifiedTimeSec + 180)
+                continue;
+        }
+
         JailUtil::tryRemoveJail(path);
         const FileUtil::Stat st(path);
         if (st.good() && st.isDirectory())
@@ -547,6 +569,9 @@ int main(int argc, char** argv)
     }
 
     SigUtil::setFatalSignals("forkit startup of " COOLWSD_VERSION " " COOLWSD_VERSION_HASH);
+
+    if (simd::init())
+        simd_deltaInit();
 
     Util::setApplicationPath(Poco::Path(argv[0]).parent().toString());
 
@@ -757,7 +782,7 @@ int main(int argc, char** argv)
     const int parentPid = getppid();
     LOG_INF("ForKit process is ready. Parent: " << parentPid);
 
-    while (!SigUtil::getShutdownRequestFlag() && !SigUtil::getTerminationFlag())
+    while (!SigUtil::getShutdownRequestFlag())
     {
         UnitKit::get().invokeForKitTest();
 

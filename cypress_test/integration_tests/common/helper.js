@@ -1,3 +1,4 @@
+/* -*- js-indent-level: 8 -*- */
 /* global cy Cypress expect */
 
 var mobileWizardIdleTime = 1250;
@@ -23,11 +24,16 @@ function copyFile(fileName, newFileName, subFolder) {
 function getRandomFileName(noRename, noFileCopy, originalName) {
 	if (noRename !== true && noFileCopy !== true) {
 		var randomName = (Math.random() + 1).toString(36).substring(7);
-		return randomName + '_' + originalName;
+		return Cypress.currentTest.title.replace(/[\/\\ ]/g, '-') + '-'+ randomName + '-' + originalName;
 	}
 	else {
 		return originalName;
 	}
+}
+
+function logError(event) {
+	Cypress.log({ name:'error:', message: (event.error.message ? event.error.message : 'no message')
+		      + '\n' + (event.error.stack ? event.error.stack : 'no stack') });
 }
 
 function logLoadingParameters(fileName, subFolder, noFileCopy, isMultiUser, subsequentLoad, hasInteractionBeforeLoad, noRename) {
@@ -41,12 +47,11 @@ function logLoadingParameters(fileName, subFolder, noFileCopy, isMultiUser, subs
 }
 
 function generateDocumentURL() {
-	var URI = 'http://localhost';
+	var URI = '';
 	if (Cypress.env('INTEGRATION') === 'php-proxy') {
-		URI += '/richproxy/proxy.php?req=';
-	} else {
-		URI += ':' + Cypress.env('SERVER_PORT');
+		URI += 'http://' + Cypress.env('SERVER') + '/richproxy/proxy.php?req=';
 	}
+
 	return URI;
 }
 
@@ -114,7 +119,16 @@ function loadTestDocNoIntegration(fileName, subFolder, noFileCopy, isMultiUser, 
 		URI = URI.replace('debug.html', 'cypress-multiuser.html');
 	}
 
-	cy.visit(URI, { onLoad: function(win) { win.onerror = cy.onUncaughtException; } });
+	cy.visit(URI, {
+		onBeforeLoad: function(win) {
+			win.addEventListener('error', logError);
+			win.addEventListener('DOMContentLoaded', function () {
+				for (var i = 0; i < win.frames.length; i++) {
+					win.frames[i].addEventListener('error', logError);
+				}
+			});
+		}
+	});
 
 	cy.log('Loading test document with a local build - end.');
 
@@ -133,11 +147,6 @@ function loadTestDocNextcloud(fileName, subFolder, subsequentLoad) {
 	cy.log('Param - fileName: ' + fileName);
 	cy.log('Param - subFolder: ' + subFolder);
 	cy.log('Param - subsequentLoad: ' + subsequentLoad);
-
-	// Ignore exceptions coming from nextcloud.
-	Cypress.on('uncaught:exception', function() {
-		return false;
-	});
 
 	upLoadFileToNextCloud(fileName, subFolder, subsequentLoad);
 
@@ -201,7 +210,8 @@ function upLoadFileToNextCloud(fileName, subFolder, subsequentLoad) {
 	cy.log('Param - subsequentLoad: ' + subsequentLoad);
 
 	// Open local nextcloud installation
-	cy.visit('http://localhost/nextcloud/index.php/apps/files');
+	var url = 'http://' + Cypress.env('SERVER') + 'nextcloud/index.php/apps/files';
+	cy.visit(url);
 
 	// Log in with cypress test user / password (if this is the first time)
 	if (subsequentLoad !== true) {
@@ -296,6 +306,7 @@ function waitForInterferingUser() {
 //                  with the username + password only for the first time.
 // noRename - whether or not to give the file a unique name, if noFileCopy is false.
 function loadTestDoc(fileName, subFolder, noFileCopy, isMultiUser, subsequentLoad, hasInteractionBeforeLoad, noRename) {
+	var server = Cypress.env('SERVER');
 	cy.log('Loading test document - start.');
 	logLoadingParameters(fileName, subFolder, noFileCopy, isMultiUser, subsequentLoad, hasInteractionBeforeLoad, noRename);
 
@@ -308,6 +319,9 @@ function loadTestDoc(fileName, subFolder, noFileCopy, isMultiUser, subsequentLoa
 	if (Cypress.env('INTEGRATION') === 'nextcloud') {
 		loadTestDocNextcloud(fileName, subFolder, subsequentLoad);
 	} else {
+		if (server !== 'localhost') {
+			noFileCopy = noRename = true;
+		}
 		destFileName = loadTestDocNoIntegration(fileName, subFolder, noFileCopy, isMultiUser, noRename);
 	}
 
@@ -450,22 +464,14 @@ function clearAllText() {
 function expectTextForClipboard(expectedPlainText) {
 	cy.log('Text:' + expectedPlainText);
 	doIfInWriter(function() {
-		// for backward compatibility allow '/nTEXT' and 'TEXT'
-		const expectedRegex = RegExp('/^(\n' + expectedPlainText + ')|(' + expectedPlainText + ')$/');
 		cy.cGet('#copy-paste-container p')
 			.then(function(pItem) {
 				if (pItem.children('font').length !== 0) {
 					cy.cGet('#copy-paste-container p font')
-						.invoke('text')
-						.then(function(value) {
-							return expectedRegex.test(value);
-						});
+						.should('have.text', expectedPlainText);
 				} else {
 					cy.cGet('#copy-paste-container p')
-						.invoke('text')
-						.then(function(value) {
-							return expectedRegex.test(value);
-						});
+						.should('have.text', expectedPlainText);
 				}
 			});
 	});
@@ -583,7 +589,7 @@ function closeDocument(fileName, testState) {
 	// For php-proxy admin console does not work, so we just open
 	// localhost and wait some time for the test document to be closed.
 	} else if (Cypress.env('INTEGRATION') === 'php-proxy') {
-		cy.visit('http://localhost/', {failOnStatusCode: false});
+		cy.visit('http://' + Cypress.env('SERVER') + '/', {failOnStatusCode: false});
 
 		cy.wait(5000);
 	} else {
@@ -594,7 +600,7 @@ function closeDocument(fileName, testState) {
 		}
 
 		// Make sure that the document is closed
-		cy.visit('http://admin:admin@localhost:' +
+		cy.visit('http://admin:admin@' + Cypress.env('SERVER') + ':' +
 			Cypress.env('SERVER_PORT') +
 			'/browser/dist/admin/admin.html');
 

@@ -93,6 +93,21 @@ function selectFromListbox(item) {
 	cy.cGet('.select2-dropdown').should('not.exist');
 }
 
+// Select an item from a JSDialog dropdown widget used on top toolbar.
+// Parameters:
+// item - item string, that we use a selector to find the right list item.
+function selectFromJSDialogListbox(item, isImage) {
+	cy.cGet('[id$="-dropdown"].modalpopup').should('be.visible');
+	// We use force because the tooltip sometimes hides the items.
+	if (isImage) {
+		cy.wait(2000); // we need some time to render custom entries
+		cy.cGet('[id$="-dropdown"].modalpopup img[alt="' + item + '"]').click({force: true});
+	} else
+		cy.cGet('[id$="-dropdown"].modalpopup').contains('span', item).click({force: true});
+
+	cy.cGet('[id$="-dropdown"].modalpopup').should('not.exist');
+}
+
 // Make sure the right dialog is opened and then we close it.
 // Used for tunneled dialogs. We don't interact with this dialogs
 // now, because they are just images. We mostly just check that
@@ -201,12 +216,13 @@ function insertImage(docType) {
 	if (mode === 'notebookbar')
 		cy.cGet('#toolbar-up .w2ui-scroll-right').click();
 
-	if (docType === 'calc' &&  mode === 'notebookbar')
+	if (docType === 'calc' &&  mode === 'notebookbar') {
 		cy.cGet('#Insert-tab-label').click();
-
-	actionOnSelector('insertGraphic', (selector) => {
-		cy.cGet(selector).click();
-	});
+		cy.cGet('#Insert-container .unoInsertGraphic').click();
+	}
+	else {
+		cy.cGet('#Home-container .unoInsertGraphic').click();
+	}
 
 	cy.cGet('#insertgraphic[type=file]').attachFile('/desktop/writer/image_to_insert.png');
 	cy.cGet('.leaflet-pane.leaflet-overlay-pane svg g').should('exist');
@@ -364,6 +380,77 @@ function openReadOnlyFile(type, filename) {
 	return testFileName;
 }
 
+function checkAccessibilityEnabledToBe(state) {
+	cy.window().then(win => {
+		cy.log('check accessibility enabled to be: ' + state);
+		var isAccessibilityEnabledAtServerLevel = win['0'].enableAccessibility;
+		// expect(isAccessibilityEnabledAtServerLevel).to.eq(true);
+		if (isAccessibilityEnabledAtServerLevel) {
+			var userInterfaceMode = win['0'].userInterfaceMode;
+			if (userInterfaceMode === 'notebookbar') {
+				if (state) {
+					cy.cGet('#togglea11ystate').should('have.class', 'selected');
+				} else {
+					cy.cGet('#togglea11ystate').should('not.have.class', 'selected');
+				}
+			} else {
+				cy.cGet('#menu-tools').click();
+				if (state) {
+					cy.cGet('#menu-togglea11ystate a').should('have.class', 'lo-menu-item-checked');
+				} else {
+					cy.cGet('#menu-togglea11ystate a').should('not.have.class', 'lo-menu-item-checked');
+				}
+				cy.cGet('div.clipboard').type('{esc}', {force: true});
+			}
+			cy.cGet('div.clipboard').then((clipboard) => {
+				expect(clipboard.get(0)._hasAccessibilitySupport()).to.eq(state);
+			});
+		} else {
+			cy.log('accessibility disabled at server level');
+		}
+	});
+}
+
+function setAccessibilityState(enable) {
+	cy.window().then(win => {
+		cy.log('set accessibility state to: ' + enable);
+		var a11yEnabled = win['0'].enableAccessibility;
+		if (a11yEnabled) {
+			var userInterfaceMode = win['0'].userInterfaceMode;
+			if (userInterfaceMode === 'notebookbar') {
+				cy.cGet('#Help-tab-label').click();
+				cy.cGet('#togglea11ystate').then((button) => {
+					//var currentState = button.get(0).classList.contains('selected');
+					var currentState = button.hasClass('selected');
+					if (currentState !== enable) {
+						button.click();
+						cy.log('accessibility state changed: ' + enable);
+					} else {
+						cy.log('accessibility already in requested state: ' + enable);
+					}
+				});
+			} else  {
+				cy.cGet('#menu-tools').click();
+				cy.cGet('#menu-togglea11ystate a').then((item) => {
+					var currentState = item.hasClass('lo-menu-item-checked');
+					if (currentState !== enable) {
+						cy.cGet('#menu-togglea11ystate').click();
+						cy.log('accessibility state changed: ' + enable);
+					} else {
+						cy.log('accessibility already in requested state: ' + enable);
+					}
+				});
+			}
+			cy.wait(500);
+			cy.cGet('div.clipboard').then((clipboard) => {
+				expect(clipboard.get(0)._hasAccessibilitySupport()).to.eq(enable);
+			});
+		} else {
+			cy.log('accessibility disabled at server level');
+		}
+	});
+}
+
 module.exports.showSidebar = showSidebar;
 module.exports.hideSidebar = hideSidebar;
 module.exports.showStatusBarIfHidden = showStatusBarIfHidden;
@@ -371,6 +458,7 @@ module.exports.showSidebarIfHidden = showSidebarIfHidden;
 module.exports.hideSidebarIfVisible = hideSidebarIfVisible;
 module.exports.selectColorFromPalette = selectColorFromPalette;
 module.exports.selectFromListbox = selectFromListbox;
+module.exports.selectFromJSDialogListbox = selectFromJSDialogListbox;
 module.exports.checkDialogAndClose = checkDialogAndClose;
 module.exports.makeZoomItemsVisible = makeZoomItemsVisible;
 module.exports.zoomIn = zoomIn;
@@ -388,3 +476,5 @@ module.exports.assertImageSize = assertImageSize;
 module.exports.openReadOnlyFile = openReadOnlyFile;
 module.exports.switchUIToNotebookbar = switchUIToNotebookbar;
 module.exports.switchUIToCompact = switchUIToCompact;
+module.exports.checkAccessibilityEnabledToBe = checkAccessibilityEnabledToBe;
+module.exports.setAccessibilityState = setAccessibilityState;

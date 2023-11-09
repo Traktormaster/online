@@ -105,7 +105,8 @@ COOL_ADMIN_JS =\
 	admin/src/AdminSocketAnalytics.js \
 	admin/src/AdminSocketSettings.js \
 	admin/src/AdminSocketHistory.js \
-	admin/src/AdminSocketLog.js
+	admin/src/AdminSocketLog.js \
+	admin/src/AdminClusterOverview.js
 
 NODE_MODULES_SRC =\
 	autolinker@3.14.1 \
@@ -286,6 +287,8 @@ COOL_JS_LST =\
 	src/layer/FormFieldButtonLayer.js \
 	src/dom/DomEvent.js \
 	src/dom/Draggable.js \
+	src/dom/NotebookbarAccessibilityDefinitions.js \
+	src/dom/NotebookbarAccessibility.js \
 	src/map/handler/Map.Drag.js \
 	src/map/handler/Map.Scroll.js \
 	src/map/handler/Map.DoubleClickZoom.js \
@@ -325,12 +328,21 @@ COOL_JS_LST =\
 	src/control/Control.LokDialog.js \
 	src/control/Control.AlertDialog.js \
 	src/control/ColorPicker.js \
+	src/control/jsdialog/Util.Dropdown.js \
+	src/control/jsdialog/Util.FocusCycle.js \
+	src/control/jsdialog/Util.ModalHelper.js \
+	src/control/jsdialog/Widget.Calendar.js \
+	src/control/jsdialog/Widget.Combobox.js \
 	src/control/jsdialog/Widget.DrawingArea.js \
 	src/control/jsdialog/Widget.FormulabarEdit.js \
+	src/control/jsdialog/Widget.Frame.js \
+	src/control/jsdialog/Widget.IconView.js \
 	src/control/jsdialog/Widget.LanguageSelector.js \
 	src/control/jsdialog/Widget.MenuButton.js \
+	src/control/jsdialog/Widget.MobileBorderSelector.js \
 	src/control/jsdialog/Widget.MobileTabControl.js \
 	src/control/jsdialog/Widget.MultilineEdit.js \
+	src/control/jsdialog/Widget.Progressbar.js \
 	src/control/jsdialog/Widget.ScrolledWindow.js \
 	src/control/jsdialog/Widget.TreeView.js \
 	src/control/Control.JSDialog.js \
@@ -678,9 +690,22 @@ $(DIST_FOLDER)/admin/%: $(srcdir)/admin/%
 	@mkdir -p $(dir $@)
 	@cp $< $@
 
+if ENABLE_DEBUG
 install-data-hook:
 	mkdir -p $(DESTDIR)$(pkgdatadir)/browser; \
 	cp -a dist/ $(DESTDIR)$(pkgdatadir)/browser/;
+else
+install-data-hook:
+	mkdir -p $(DESTDIR)$(pkgdatadir)/browser; \
+	rsync -a --exclude='src' \
+		--exclude='debug.html' \
+		--exclude='framed.doc.html' \
+		--exclude='framed.html' \
+		--exclude='load.doc.html' \
+		--exclude='multidocs.html' \
+		--exclude='tsconfig.tsbuildinfo' \
+		dist $(DESTDIR)$(pkgdatadir)/browser/;
+endif
 
 libs:
 	@mkdir -p $(abs_srcdir)/libs
@@ -705,6 +730,7 @@ pot:
 		src/control/Control.DownloadProgress.js \
 		src/control/Control.FormulaBar.js \
 		src/control/Control.FormulaBarJSDialog.js \
+		src/control/jsdialog/Widget.MobileBorderSelector.js \
 		src/control/Control.JSDialogBuilder.js \
 		src/control/Control.LanguageDialog.js \
 		src/control/Control.Menubar.js \
@@ -790,6 +816,7 @@ build-tests: $(MOCHA_TS_JS_FILES)
 	@echo "Build of mocha test finished."
 
 MOCHA_TEST_LOG = "`pwd`/mocha.log"
+DUPLICATION_TEST_LOG = "`pwd`/duplication.log"
 check-local: $(MOCHA_TS_JS_FILES)
 	@echo "Running mocha tests..."
 	@echo > ${MOCHA_TEST_LOG}
@@ -797,6 +824,15 @@ check-local: $(MOCHA_TS_JS_FILES)
 		echo "Mocha tests finished successfully. Results in ${MOCHA_TEST_LOG}"; \
 	else \
 		cat ${MOCHA_TEST_LOG}; \
+		exit 1; \
+	fi
+
+	@echo "Checking code duplication..."
+	@echo > ${DUPLICATION_TEST_LOG}
+	@if npm run duplication 2> ${DUPLICATION_TEST_LOG} 1>&2; then \
+		echo "Code duplication tests finished successfully."; \
+	else \
+		cat ${DUPLICATION_TEST_LOG}; \
 		exit 1; \
 	fi
 

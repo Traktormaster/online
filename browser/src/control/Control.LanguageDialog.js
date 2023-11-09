@@ -1,5 +1,11 @@
 /* -*- js-indent-level: 8 -*- */
 /*
+ * Copyright the Collabora Online contributors.
+ *
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
+/*
  * L.Control.LanguageDialog used for spellchecking language
  */
 
@@ -17,7 +23,7 @@ L.Control.LanguageDialog = L.Control.extend({
 
 	_onItemSelected: function(language) {
 		var unoCommand = '.uno:LanguageStatus?Language:string=' + this.applyTo + '_' + language;
-		this.map.sendUnoCommand(unoCommand);
+		this.map.sendUnoCommand(unoCommand, null, true);
 	},
 
 	_getSelectedLanguage: function() {

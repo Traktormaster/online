@@ -127,6 +127,9 @@ L.Map.include({
 	},
 
 	_processPreviewQueue: function() {
+		if (!this._docLayer._canonicalIdInitialized)
+			return;
+
 		if (this._previewRequestsOnFly > 1) {
 			// we don't always get a response for each tile requests
 			// especially when we have more than one view
@@ -207,8 +210,7 @@ L.Map.include({
 							'tileposy=' + tilePosY + ' ' +
 							'tilewidth=' + tileWidth + ' ' +
 							'tileheight=' + tileHeight + ' ' +
-							'id=' + id + ' ' +
-						 'broadcast=no');
+							'id=' + id);
 			this._processPreviewQueue();
 		}
 
@@ -237,8 +239,7 @@ L.Map.include({
 							'tileposy=' + tilePosY + ' ' +
 							'tilewidth=' + tileWidth + ' ' +
 							'tileheight=' + tileHeight + ' ' +
-							'id=' + id + ' ' +
-							'broadcast=no');
+							'id=' + id);
 		this._processPreviewQueue();
 	},
 
@@ -261,6 +262,10 @@ L.Map.include({
 			var pos = new L.Point(app.file.writer.pageRectangleList[docLayer._currentPage][0], app.file.writer.pageRectangleList[docLayer._currentPage][1]);
 			pos = docLayer._twipsToCorePixels(pos);
 			this.scrollTop(pos.y);
+			var state = 'Page ' + (docLayer._currentPage + 1) + ' of ' + app.file.writer.pageRectangleList.length;
+			this.fire('updatestatepagenumber',{
+				state: state
+			});
 		}
 		else {
 			app.socket.sendMessage('setpage page=' + docLayer._currentPage);

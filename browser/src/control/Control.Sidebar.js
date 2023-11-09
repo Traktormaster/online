@@ -56,40 +56,16 @@ L.Control.Sidebar = L.Control.extend({
 		if (!this.container)
 			return;
 
-		var controlId = data.control.id;
-		var control = this.container.querySelector('[id=\'' + controlId + '\']');
-		if (!control) {
-			window.app.console.warn('jsdialogupdate: not found control with id: "' + data.control.id + '"');
-			return;
-		}
-
-		var parent = control.parentNode;
-		if (!parent)
-			return;
-
 		if (!this.builder)
 			return;
 
-		var scrollTop = control.scrollTop;
-		var focusedElement = document.activeElement;
-		var focusedElementInDialog = focusedElement ? this.container.querySelector('[id=\'' + focusedElement.id + '\']') : null;
-		var focusedId = focusedElementInDialog ? focusedElementInDialog.id : null;
-		control.style.visibility = 'hidden';
-
-		var temporaryParent = L.DomUtil.create('div');
-		this.builder.build(temporaryParent, [data.control], false);
-		parent.insertBefore(temporaryParent.querySelector('[id=\'' + controlId + '\']'), control.nextSibling);
-		var backupGridSpan = control.style.gridColumn;
-		L.DomUtil.remove(control);
-
-		var newControl = this.container.querySelector('[id=\'' + controlId + '\']');
-		if (newControl) {
-			newControl.scrollTop = scrollTop;
-			newControl.style.gridColumn = backupGridSpan;
+		// reduce unwanted warnings in console
+		if (data.control.id === 'addonimage') {
+			window.app.console.log('Ignored update for control: ' + data.control.id);
+			return;
 		}
 
-		if (focusedId)
-			this.container.querySelector('[id=\'' + focusedId + '\']').focus();
+		this.builder.updateWidget(this.container, data.control);
 	},
 
 	onJSAction: function (e) {
@@ -104,16 +80,23 @@ L.Control.Sidebar = L.Control.extend({
 		if (!this.container)
 			return;
 
+		var innerData = data.data;
+		if (!innerData)
+			return;
+
+		var controlId = innerData.control_id;
+
 		// Panels share the same name for main containers, do not execute actions for them
 		// if panel has to be shown or hidden, full update will appear
-		if (data.data && (data.data.control_id === 'contents' ||
-			data.data.control_id === 'Panel' ||
-			data.data.control_id === 'titlebar')) {
-			window.app.console.log('Ignored action: ' + data.data.action_type + ' for control: ' + data.data.control_id);
+		if (controlId === 'contents' ||
+			controlId === 'Panel' ||
+			controlId === 'titlebar' ||
+			controlId === 'addonimage') {
+			window.app.console.log('Ignored action: ' + innerData.action_type + ' for control: ' + controlId);
 			return;
 		}
 
-		this.builder.executeAction(this.container, data.data);
+		this.builder.executeAction(this.container, innerData);
 	},
 
 	onResize: function() {

@@ -86,7 +86,7 @@ function typeIntoFormulabar(text) {
 		});
 
 	cy.cGet('#sc_input_window.formulabar').click(); // This probably shouldn't be here, but acceptformula doesn't get visible without a click.
-	cy.cGet('#sc_input_window.formulabar').should('have.focus');
+	cy.cGet('#sc_input_window.formulabar').should('have.class', 'focused');
 	cy.cGet('body').type(text);
 
 	helper.doIfOnMobile(function() {
@@ -221,6 +221,20 @@ function selectCellsInRange(range) {
 		.type(range + '{enter}');
 }
 
+function openAutoFilterMenu(secondColumn) {
+	let x = 95;
+	if (secondColumn) {
+		x += 105;
+	}
+	cy.cGet('#map')
+		.then(function(items) {
+			expect(items).to.have.lengthOf(1);
+			var XPos = items[0].getBoundingClientRect().left + x;
+			var YPos = items[0].getBoundingClientRect().top + 10;
+			cy.cGet('body').click(XPos, YPos);
+		});
+}
+
 module.exports.clickOnFirstCell = clickOnFirstCell;
 module.exports.dblClickOnFirstCell = dblClickOnFirstCell;
 module.exports.clickFormulaBar = clickFormulaBar;
@@ -231,3 +245,4 @@ module.exports.selectFirstColumn = selectFirstColumn;
 module.exports.ensureViewContainsCellCursor = ensureViewContainsCellCursor;
 module.exports.assertDataClipboardTable = assertDataClipboardTable;
 module.exports.selectCellsInRange = selectCellsInRange;
+module.exports.openAutoFilterMenu = openAutoFilterMenu;

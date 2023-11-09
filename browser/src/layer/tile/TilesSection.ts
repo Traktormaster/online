@@ -8,9 +8,8 @@ declare var app: any;
 
 class TilesSection extends CanvasSectionObject {
 	map: any;
-	offscreenCanvases: Array<any> = new Array(0);
-	oscCtxs: Array<any> = new Array(0);
 	isJSDOM: boolean = false; // testing
+	checkpattern: any;
 
 	constructor () {
 		super({
@@ -33,54 +32,40 @@ class TilesSection extends CanvasSectionObject {
 		this.sectionProperties.tsManager = this.sectionProperties.docLayer._painter;
 		this.sectionProperties.pageBackgroundInnerMargin = 0; // In core pixels. We don't want backgrounds to have exact same borders with tiles for not making them visible when tiles are rendered.
 		this.sectionProperties.pageBackgroundBorderColor = 'lightgrey';
-		this.sectionProperties.pageBackgroundFillColorWriter = 'white';
 		this.sectionProperties.pageBackgroundTextColor = 'grey';
 		this.sectionProperties.pageBackgroundFont = String(40 * app.roundedDpiScale) + 'px Arial';
 
 		this.isJSDOM = typeof window === 'object' && window.name === 'nodejs';
+
+		this.checkpattern = this.makeCheckPattern();
+	}
+
+	private makeCheckPattern() {
+		var canvas = document.createElement('canvas');
+		canvas.width = 256;
+		canvas.height = 256;
+		var drawctx = canvas.getContext('2d');
+		var patternOn = true;
+		for (var y = 0; y < 256; y+=32) {
+			for (var x = 0; x < 256; x+=32) {
+				if (patternOn)
+					drawctx.fillStyle = 'darkgray';
+				else
+					drawctx.fillStyle = 'gray';
+				patternOn = !patternOn;
+				drawctx.fillRect(x, y, 32, 32);
+			}
+			patternOn = !patternOn;
+		}
+		return canvas;
 	}
 
 	public onInitialize () {
-		for (var i = 0; i < 4; i++) {
-			this.offscreenCanvases.push(document.createElement('canvas'));
-			this.oscCtxs.push(this.offscreenCanvases[i].getContext('2d', { alpha: false }));
-		}
 		this.onResize();
 	}
 
 	public onResize () {
-		var tileSize = this.sectionProperties.docLayer._getTileSize();
-		var borderSize = 3;
-		this.sectionProperties.osCanvasExtraSize = 2 * borderSize * tileSize;
-		for (var i = 0; i < 4; ++i) {
-			this.offscreenCanvases[i].width = this.size[0] + this.sectionProperties.osCanvasExtraSize;
-			this.offscreenCanvases[i].height = this.size[1] + this.sectionProperties.osCanvasExtraSize;
-		}
-	}
-
-	extendedPaneBounds (paneBounds: any) {
-		var extendedBounds = paneBounds.clone();
-		var halfExtraSize = this.sectionProperties.osCanvasExtraSize / 2; // This is always an integer.
-		var spCxt = this.sectionProperties.docLayer.getSplitPanesContext();
-		if (spCxt) {
-			var splitPos = spCxt.getSplitPos().multiplyBy(app.dpiScale);
-			if (paneBounds.min.x) { // pane can move in x direction.
-				extendedBounds.min.x = Math.max(splitPos.x, extendedBounds.min.x - halfExtraSize);
-				extendedBounds.max.x += halfExtraSize;
-			}
-			if (paneBounds.min.y) { // pane can move in y direction.
-				extendedBounds.min.y = Math.max(splitPos.y, extendedBounds.min.y - halfExtraSize);
-				extendedBounds.max.y += halfExtraSize;
-			}
-		}
-		else {
-			extendedBounds.min.x -= halfExtraSize;
-			extendedBounds.max.x += halfExtraSize;
-			extendedBounds.min.y -= halfExtraSize;
-			extendedBounds.max.y += halfExtraSize;
-		}
-
-		return extendedBounds;
+		// empty: probably safe to remove this method and use parent CanvasSectionObject::onResize
 	}
 
 	paintWithPanes (tile: any, ctx: any, async: boolean, now: Date) {
@@ -92,13 +77,10 @@ class TilesSection extends CanvasSectionObject {
 			var paneBounds = ctx.paneBoundsList[i];
 			// co-ordinates of the main-(bottom right) pane in core document pixels
 			var viewBounds = ctx.viewBounds;
-			// Extended pane bounds
-			var extendedBounds = this.extendedPaneBounds(paneBounds);
 
 			// into real pixel-land ...
 			paneBounds.round();
 			viewBounds.round();
-			extendedBounds.round();
 
 			if (paneBounds.intersects(tileBounds)) {
 				var paneOffset = paneBounds.getTopLeft(); // allocates
@@ -107,11 +89,6 @@ class TilesSection extends CanvasSectionObject {
 				paneOffset.y = Math.min(paneOffset.y, viewBounds.min.y);
 
 				this.drawTileInPane(tile, tileBounds, paneBounds, paneOffset, this.context, async, now);
-			}
-
-			if (extendedBounds.intersects(tileBounds)) {
-				var offset = extendedBounds.getTopLeft();
-				this.drawTileInPane(tile, tileBounds, extendedBounds, offset, this.oscCtxs[i], async, now);
 			}
 		}
 	}
@@ -158,22 +135,13 @@ class TilesSection extends CanvasSectionObject {
 			}
 
 			this.beforeDraw(canvasCtx);
-			this.ensureCanvas(tile, now);
-			canvasCtx.drawImage(tile.canvas,
-				crop.min.x - tileBounds.min.x,
-				crop.min.y - tileBounds.min.y,
-				cropWidth, cropHeight,
-				crop.min.x - paneOffset.x,
-				crop.min.y - paneOffset.y,
-				cropWidth, cropHeight);
-			this.afterDraw(canvasCtx);
-		}
-
-		if (this.sectionProperties.docLayer._debug)
-		{
-			canvasCtx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
-			this.beforeDraw(canvasCtx);
-			canvasCtx.strokeRect(tile.coords.x - paneBounds.min.x, tile.coords.y - paneBounds.min.y, 256, 256);
+			this.drawTileToCanvasCrop(tile, now, canvasCtx,
+									  crop.min.x - tileBounds.min.x,
+									  crop.min.y - tileBounds.min.y,
+									  cropWidth, cropHeight,
+									  crop.min.x - paneOffset.x,
+									  crop.min.y - paneOffset.y,
+									  cropWidth, cropHeight);
 			this.afterDraw(canvasCtx);
 		}
 	}
@@ -183,14 +151,12 @@ class TilesSection extends CanvasSectionObject {
 		this.context.strokeRect(offset.x, offset.y, tileSize, tileSize);
 		this.context.font = '20px Verdana';
 		this.context.fillStyle = 'black';
-		this.context.fillText(tile.coords.x + ' ' + tile.coords.y + ' ' + tile.coords.part + ' ' + (tile.loaded ? 'y': 'n'), Math.round(offset.x + tileSize * 0.5), Math.round(offset.y + tileSize * 0.5));
+		this.context.fillText(tile.coords.x + ' ' + tile.coords.y + ' ' + tile.coords.part, Math.round(offset.x + tileSize * 0.5), Math.round(offset.y + tileSize * 0.5));
 	}
 
 	paintSimple (tile: any, ctx: any, async: boolean, now: Date) {
 		ctx.viewBounds.round();
 		var offset = new L.Point(tile.coords.getPos().x - ctx.viewBounds.min.x, tile.coords.getPos().y - ctx.viewBounds.min.y);
-		var halfExtraSize = this.sectionProperties.osCanvasExtraSize / 2;
-		var extendedOffset = offset.add(new L.Point(halfExtraSize, halfExtraSize));
 
 		if ((async || this.containerObject.isZoomChanged()) && !app.file.fileBasedView) {
 			// Non Calc tiles(handled by paintSimple) can have transparent pixels,
@@ -201,24 +167,20 @@ class TilesSection extends CanvasSectionObject {
 			this.context.fillRect(offset.x, offset.y, ctx.tileSize.x, ctx.tileSize.y);
 		}
 
+		var tileSizeX;
+		var tileSizeY;
 		if (app.file.fileBasedView) {
-			var tileSize = this.sectionProperties.docLayer._tileSize;
-			var ratio = tileSize / this.sectionProperties.docLayer._tileHeightTwips;
+			tileSizeX = tileSizeY = this.sectionProperties.docLayer._tileSize;
+			var ratio = tileSizeX / this.sectionProperties.docLayer._tileHeightTwips;
 			var partHeightPixels = Math.round((this.sectionProperties.docLayer._partHeightTwips + this.sectionProperties.docLayer._spaceBetweenParts) * ratio);
 
 			offset.y = tile.coords.part * partHeightPixels + tile.coords.y - this.documentTopLeft[1];
-			extendedOffset.y = offset.y + halfExtraSize;
+		} else {
+			tileSizeX = ctx.tileSize.x;
+			tileSizeY = ctx.tileSize.y;
+		}
 
-			this.ensureCanvas(tile, now);
-			this.context.drawImage(tile.canvas, offset.x, offset.y, tileSize, tileSize);
-			this.oscCtxs[0].drawImage(tile.canvas, extendedOffset.x, extendedOffset.y, tileSize, tileSize);
-			//this.pdfViewDrawTileBorders(tile, offset, tileSize);
-		}
-		else {
-			this.ensureCanvas(tile, now);
-			this.context.drawImage(tile.canvas, offset.x, offset.y, ctx.tileSize.x, ctx.tileSize.y);
-			this.oscCtxs[0].drawImage(tile.canvas, extendedOffset.x, extendedOffset.y, ctx.tileSize.x, ctx.tileSize.y);
-		}
+		this.drawTileToCanvas(tile, now, this.context, offset.x, offset.y, tileSizeX, tileSizeY);
 	}
 
 	public paint (tile: any, ctx: any, async: boolean, now: Date) {
@@ -279,23 +241,23 @@ class TilesSection extends CanvasSectionObject {
 		part = part || this.sectionProperties.docLayer._selectedPart;
 		ctx = ctx || this.sectionProperties.tsManager._paintContext();
 
-		var allTilesLoaded = true;
+		var allTilesFetched = true;
 		this.forEachTileInView(zoom, part, mode, ctx, function (tile: any): boolean {
-			// Ensure tile is loaded.
-			if (!tile || !tile.loaded) {
-				allTilesLoaded = false;
+			// Ensure all tile are available.
+			if (!tile || tile.needsFetch()) {
+				allTilesFetched = false;
 				return false; // stop search.
 			}
 			return true; // continue checking remaining tiles.
 		});
 
-		return allTilesLoaded;
+		return allTilesFetched;
 	}
 
 	private drawPageBackgroundWriter (ctx: any, rectangle: any, pageNumber: number) {
 		rectangle = [Math.round(rectangle[0] * app.twipsToPixels), Math.round(rectangle[1] * app.twipsToPixels), Math.round(rectangle[2] * app.twipsToPixels), Math.round(rectangle[3] * app.twipsToPixels)];
 
-		this.context.fillStyle = this.sectionProperties.pageBackgroundFillColorWriter;
+		this.context.fillStyle = this.containerObject.getDocumentBackgroundColor(); // used to be pageBackgroundFillColorWriter (see below)
 		this.context.fillRect(rectangle[0] - ctx.viewBounds.min.x + this.sectionProperties.pageBackgroundInnerMargin,
 			rectangle[1] - ctx.viewBounds.min.y + this.sectionProperties.pageBackgroundInnerMargin,
 			rectangle[2] - this.sectionProperties.pageBackgroundInnerMargin,
@@ -405,22 +367,28 @@ class TilesSection extends CanvasSectionObject {
 			this.drawPageBackgrounds(ctx);
 		}
 
-		for (var i = 0; i < ctx.paneBoundsList.length; ++i) {
-			this.oscCtxs[i].fillStyle = this.containerObject.getClearColor();
-			this.oscCtxs[i].fillRect(0, 0, this.offscreenCanvases[i].width, this.offscreenCanvases[i].height);
-		}
-
 		var docLayer = this.sectionProperties.docLayer;
 		var doneTiles = new Set();
 		var now = new Date();
+		var debugForcePaint = this.sectionProperties.docLayer._debug;
 		this.forEachTileInView(zoom, part, mode, ctx, function (tile: any, coords: any): boolean {
 			if (doneTiles.has(coords.key()))
 				return true;
 
-			// Ensure tile is loaded and is within document bounds.
-			if (tile && tile.loaded && docLayer._isValidTile(coords)) {
-				if (!this.isJSDOM) // perf-test code
-				   this.paint(tile, ctx, false /* async? */, now);
+			// Ensure tile is within document bounds.
+			if (tile && docLayer._isValidTile(coords)) {
+				if (!this.isJSDOM) { // perf-test code
+					if (tile.hasContent() || debugForcePaint) { // Ensure tile is loaded
+						this.paint(tile, ctx, false /* async? */, now);
+					}
+					else if (this.sectionProperties.docLayer._debug) {
+						// when debugging draw a checkerboard for the missing tile
+						var oldcanvas = tile.canvas;
+						tile.canvas = this.checkpattern;
+						this.paint(tile, ctx, false /* async? */, now);
+						tile.canvas = oldcanvas;
+					}
+				}
 			}
 			doneTiles.add(coords.key());
 			return true; // continue with remaining tiles.
@@ -574,6 +542,136 @@ class TilesSection extends CanvasSectionObject {
 		this.sectionProperties.docLayer.ensureCanvas(tile, now);
 	}
 
+	public drawTileToCanvas(tile: any, now: Date, canvas: CanvasRenderingContext2D,
+							dx: number, dy: number, dWidth: number, dHeight: number)
+	{
+		this.ensureCanvas(tile, now);
+		this.drawTileToCanvasCrop(tile, now, canvas,
+								  0, 0, tile.canvas.width, tile.canvas.height,
+								  dx, dy, dWidth, dHeight);
+	}
+
+	private drawDebugHistogram(canvas: CanvasRenderingContext2D, x: number, y: number, value: number, offset: number)
+	{
+			const tSize = 256;
+			const deltaSize = 4;
+			var maxDeltas = (tSize - 16) / deltaSize;
+
+			// offset vertically down to 'offset'
+			const yoff = Math.floor(offset / maxDeltas);
+			y += yoff * deltaSize;
+			offset -= yoff * maxDeltas;
+
+			var firstRowFill = Math.min(value, maxDeltas - offset);
+
+			// fill first row from offset
+			if (firstRowFill > 0)
+				canvas.fillRect(x + offset * deltaSize, y, firstRowFill * deltaSize, deltaSize);
+
+			// render the rest:
+			value = value - firstRowFill;
+
+			// central rectangle
+			var rowBlock = Math.floor(value / maxDeltas);
+
+			if (rowBlock > 0)
+				canvas.fillRect(x, y + deltaSize, maxDeltas * deltaSize, rowBlock * deltaSize);
+
+			// Fill last row
+			var rowLeft = value % maxDeltas;
+			if (rowLeft > 0)
+				canvas.fillRect(x, y + rowBlock * deltaSize + deltaSize, rowLeft * deltaSize, deltaSize);
+	}
+
+	public drawTileToCanvasCrop(tile: any, now: Date, canvas: CanvasRenderingContext2D,
+								sx: number, sy: number, sWidth: number, sHeight: number,
+								dx: number, dy: number, dWidth: number, dHeight: number)
+	{
+		this.ensureCanvas(tile, now);
+
+		/* if (!(tile.wireId % 4)) // great for debugging tile grid alignment.
+				canvas.drawImage(this.checkpattern, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight);
+		else */
+		canvas.drawImage(tile.canvas, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight);
+
+		if (this.sectionProperties.docLayer._debug)
+		{
+			this.beforeDraw(canvas);
+
+			// clipping push - normally we avoid clipping for perf.
+			canvas.save();
+			const clipRegion = new Path2D();
+			clipRegion.rect(dx, dy, dWidth, dHeight);
+			canvas.clip(clipRegion);
+
+			// want to render our bits 'inside' the tile - but we may have only part of it.
+			// so offset our rendering and rely on clipping to help.
+			const ox = -sx;
+			const oy = -sy;
+			const tSize = 256;
+
+			// blue boundary line on tiles
+			canvas.lineWidth = 1;
+			canvas.strokeStyle = 'rgba(0, 0, 255, 0.8)';
+			canvas.beginPath();
+			canvas.moveTo(ox + dx + 0.5, oy + dy + 0.5);
+			canvas.lineTo(ox + dx + 0.5, oy + dy + tSize + 0.5);
+			canvas.lineTo(ox + dx + tSize + 0.5, oy + dy + tSize + 0.5);
+			canvas.lineTo(ox + dx + tSize + 0.5, oy + dy + 0.5);
+			canvas.lineTo(ox + dx + 0.5, oy + dy + 0.5);
+			canvas.stroke();
+
+			// state of the tile
+			if (!tile.hasContent())
+				canvas.fillStyle = 'rgba(255, 0, 0, 0.8)';   // red
+			else if (tile.needsFetch())
+				canvas.fillStyle = 'rgba(255, 255, 0, 0.8)'; // yellow
+			else // present
+				canvas.fillStyle = 'rgba(0, 255, 0, 0.5)';   // green
+			canvas.fillRect(ox + dx + 1.5, oy + dy + 1.5, 12, 12);
+
+			// deltas graph
+			if (tile.deltaCount)
+			{
+				// blue/grey deltas
+				canvas.fillStyle = 'rgba(0, 0, 256, 0.3)';
+				this.drawDebugHistogram(canvas, ox + dx + 1.5 + 14, oy + dy + 1.5, tile.deltaCount, 0);
+				// yellow/grey deltas
+				canvas.fillStyle = 'rgba(256, 256, 0, 0.3)';
+				this.drawDebugHistogram(canvas, ox + dx + 1.5 + 14, oy + dy + 1.5, tile.updateCount, tile.deltaCount);
+			}
+
+			// Metrics on-top of the tile:
+			var lines = [
+				'wireId: ' + tile.wireId,
+				'invalidFrom: ' + tile.invalidFrom,
+				'nviewid: ' + tile.viewId,
+				'invalidates: ' + tile.invalidateCount,
+				'tile: ' + tile.loadCount + ' \u0394: ' + tile.deltaCount + ' upd: ' + tile.updateCount,
+				'misses: ' + tile.missingContent + ' gce: ' + tile.gcErrors,
+				'dlta size/kB: ' + ((tile.rawDeltas ? tile.rawDeltas.length : 0)/1024).toFixed(2)
+			];
+// FIXME: generate metrics of how long a tile has been visible & invalid for.
+//			if (tile._debugTime && tile._debugTime.date !== 0)
+//					lines.push(this.sectionProperties.docLayer._debugSetTimes(tile._debugTime, +new Date() - tile._debugTime.date));
+
+			const startY = tSize - 12 * lines.length;
+
+			// background
+			canvas.fillStyle = 'rgba(220, 220, 220, 0.5)'; // greyish
+			canvas.fillRect(ox + dx + 1.5, oy + dy + startY - 12.0, 100, 12 * lines.length + 8.0);
+
+			canvas.font = '12px sans';
+			canvas.fillStyle = 'rgba(0, 0, 0, 1.0)';   // black
+			canvas.textAlign = 'left';
+			for (var i = 0 ; i < lines.length; ++i)
+					canvas.fillText(lines[i], ox + dx + 5.5, oy + dy + startY + i*12);
+
+			canvas.restore();
+			this.afterDraw(canvas);
+		}
+	}
+
 	// Called by tsManager to draw a zoom animation frame.
 	public drawZoomFrame(ctx?: any) {
 		var tsManager = this.sectionProperties.tsManager;
@@ -672,16 +770,15 @@ class TilesSection extends CanvasSectionObject {
 				var tileOffset = crop.min.subtract(tileBounds.min);
 				var paneOffset = crop.min.subtract(docRangeScaled.min.subtract(destPosScaled));
 				if (cropWidth && cropHeight) {
-					section.ensureCanvas(tile, now);
-					canvasContext.drawImage(tile.canvas,
-						tileOffset.x, tileOffset.y, // source x, y
-						cropWidth, cropHeight, // source size
-						// Destination x, y, w, h (In non-Chrome browsers it leaves lines without the 0.5 correction).
-						Math.floor(paneOffset.x / relScale * scale) + 0.5, // Destination x
-						Math.floor(paneOffset.y / relScale * scale) + 0.5, // Destination y
-
-						Math.floor((cropWidth / relScale) * scale) + 1.5,    // Destination width
-						Math.floor((cropHeight / relScale) * scale) + 1.5);    // Destination height
+						section.drawTileToCanvasCrop(
+								tile, now, canvasContext,
+								tileOffset.x, tileOffset.y, // source x, y
+								cropWidth, cropHeight, // source size
+								// Destination x, y, w, h (In non-Chrome browsers it leaves lines without the 0.5 correction).
+								Math.floor(paneOffset.x / relScale * scale) + 0.5, // Destination x
+								Math.floor(paneOffset.y / relScale * scale) + 0.5, // Destination y
+								Math.floor((cropWidth / relScale) * scale) + 1.5,    // Destination width
+								Math.floor((cropHeight / relScale) * scale) + 1.5);    // Destination height
 				}
 
 				return true;

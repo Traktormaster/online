@@ -579,7 +579,6 @@ public:
     /// Set the file to send as the body of the request.
     void setBodyFile(const std::string& path)
     {
-        //FIXME: use generalized lambda capture to move the ifstream, available in C++14.
         auto ifs = std::make_shared<std::ifstream>(path, std::ios::binary);
 
         ifs->seekg(0, std::ios_base::end);
@@ -587,12 +586,28 @@ public:
         ifs->seekg(0, std::ios_base::beg);
 
         setBodySource(
-            [=](char* buf, int64_t len) -> int64_t
+            [ ifs=std::move(ifs) ](char* buf, int64_t len) -> int64_t
             {
                 ifs->read(buf, len);
                 return ifs->gcount();
             },
             size);
+    }
+
+    void setBody(const std::string& body, std::string contentType = "text/html charset=UTF-8")
+    {
+        if (!body.empty()) // Type is only meaningful if there is a body.
+            _header.setContentType(std::move(contentType));
+
+        auto iss = std::make_shared<std::istringstream>(body, std::ios::binary);
+
+        setBodySource(
+            [ iss=std::move(iss) ](char* buf, int64_t len) -> int64_t
+            {
+                iss->read(buf, len);
+                return iss->gcount();
+            },
+            body.size());
     }
 
     Stage stage() const { return _stage; }
@@ -840,6 +855,12 @@ public:
 
     /// Set an HTTP header field, replacing an earlier value, if exists.
     void set(const std::string& key, std::string value) { _header.set(key, std::move(value)); }
+
+    /// Set the Content-Type header.
+    void setContentType(std::string type) { _header.setContentType(std::move(type)); }
+
+    /// Set the Content-Length header.
+    void setContentLength(int64_t length) { _header.setContentLength(length); }
 
     /// Get a header entry value by key, if found, defaulting to @def, if missing.
     std::string get(const std::string& key, const std::string& def = std::string()) const
@@ -1279,7 +1300,7 @@ private:
     }
 
     /// Set up a new request and response.
-    void newRequest(Request req)
+    void newRequest(const Request& req)
     {
         _startTime = std::chrono::steady_clock::now();
 
@@ -1289,7 +1310,7 @@ private:
         // doesn't have our (Session) reference. Also,
         // it's good that we are notified that the request
         // has retired, so we can perform housekeeping.
-        Response::FinishedCallback onFinished = [&]()
+        Response::FinishedCallback onFinished = [this]()
         {
             LOG_TRC("onFinished");
             assert(_response && "Must have response object");
@@ -1301,7 +1322,14 @@ private:
             if (_onFinished)
             {
                 LOG_TRC("onFinished calling client");
-                _onFinished(std::static_pointer_cast<Session>(shared_from_this()));
+                try
+                {
+                    _onFinished(std::static_pointer_cast<Session>(shared_from_this()));
+                }
+                catch (const std::exception& exc)
+                {
+                    LOG_ERR("Error while invoking onFinished client callback: " << exc.what());
+                }
             }
 
             if (_response->get("Connection", "") == "close")
@@ -1315,7 +1343,7 @@ private:
         _response.reset();
         _response = std::make_shared<Response>(onFinished, _fd);
 
-        _request = std::move(req);
+        _request = req;
 
         std::string host = _host;
 
@@ -1388,7 +1416,7 @@ private:
             }
 
             LOG_TRC("HandleIncomingMessage: buffer has:\n"
-                    << Util::dumpHex(std::string(data.data(), std::min(data.size(), 256UL))));
+                    << Util::dumpHex(std::string(data.data(), std::min<size_t>(data.size(), 256UL))));
 
             const int64_t read = _response->readData(data.data(), data.size());
             if (read >= 0)
@@ -1453,7 +1481,8 @@ private:
         _socket.reset(); // Reset to make sure we are disconnected.
         std::shared_ptr<StreamSocket> socket =
             net::connect(_host, _port, isSecure(), shared_from_this());
-        assert(_fd == socket->getFD() && "The socket FD must have been set in onConnect");
+        assert((!socket || _fd == socket->getFD()) &&
+               "The socket FD must have been set in onConnect");
 
         // When used with proxy.php we may indeed get nullptr here.
         // assert(socket && "Unexpected nullptr returned from net::connect");
@@ -1532,6 +1561,10 @@ public:
         , _size(0)
         , _fd(-1)
         , _connected(false)
+        , _start(0)
+        , _end(-1)
+        , _startIsSuffix(false)
+        , _statusCode(http::StatusCode::OK)
     {
     }
 
@@ -1561,8 +1594,13 @@ public:
     /// Note: when reusing this Session, it is assumed that the socket
     /// is already added to the SocketPoll on a previous call (do not
     /// use multiple SocketPoll instances on the same Session).
-    bool asyncUpload(std::string fromFile, std::string mimeType)
+    bool asyncUpload(std::string fromFile, std::string mimeType, int start, int end, bool startIsSuffix, http::StatusCode statusCode = http::StatusCode::OK)
     {
+        _start = start;
+        _end = end;
+        _startIsSuffix = startIsSuffix;
+        _statusCode = statusCode;
+
         LOG_TRC("asyncUpload from file [" << fromFile << ']');
 
         _fd = open(fromFile.c_str(), O_RDONLY);
@@ -1585,7 +1623,91 @@ public:
         _size = sb.st_size;
         _data = std::move(fromFile);
         _mimeType = std::move(mimeType);
+
+        int firstBytePos = getStart();
+
+        if (lseek(_fd, firstBytePos, SEEK_SET) < 0)
+            LOG_SYS("Failed to seek " << _data << " to " << firstBytePos << " because: " << strerror(errno));
+        else
+            _pos = firstBytePos;
+
         return true;
+    }
+
+    /// Start an asynchronous upload of a whole file
+    bool asyncUpload(std::string fromFile, std::string mimeType)
+    {
+        return asyncUpload(fromFile, mimeType, 0, -1, false);
+    }
+
+    /// Start a partial asynchronous upload from a file based on the contents of a "Range" header
+    bool asyncUpload(std::string fromFile, std::string mimeType, std::string rangeHeader)
+    {
+        size_t equalsPos = rangeHeader.find("=");
+        if (equalsPos == std::string::npos) return asyncUpload(fromFile, mimeType);
+
+        std::string unit = rangeHeader.substr(0, equalsPos);
+        if (unit != "bytes") return asyncUpload(fromFile, mimeType);
+
+        std::string range = rangeHeader.substr(equalsPos + 1);
+
+        size_t dashPos = range.find("-");
+        std::string startString = range.substr(0, dashPos);
+        std::string endString = "-1";
+
+        if (dashPos != std::string::npos) {
+            endString = range.substr(dashPos + 1);
+        }
+
+        int start = 0;
+        int end = -1;
+        bool startIsSuffix = false;
+
+        if (startString == "") {
+            // Could be a suffix
+            try {
+                start = std::stoi(endString);
+                startIsSuffix = true;
+            }
+            catch (std::invalid_argument&) {}
+            catch (std::out_of_range&) {}
+
+            return asyncUpload(fromFile, mimeType, start, end, startIsSuffix, http::StatusCode::PartialContent);
+        }
+
+        try {
+            start = std::stoi(startString);
+            end = std::stoi(endString) + 1;
+        }
+        catch (std::invalid_argument&) {}
+        catch (std::out_of_range&) {}
+
+        // FIXME: does not support ranges that specify multiple comma-separated values
+
+        return asyncUpload(fromFile, mimeType, start, end, startIsSuffix, http::StatusCode::PartialContent);
+    }
+
+    int getStart() {
+        if (_startIsSuffix) return _size - _start;
+        return _start;
+    }
+
+    int getEnd() {
+        if (_startIsSuffix) return _size;
+        if (_end == -1) return _size;
+        if (_end > _size) return _size;
+
+        return _end;
+    }
+
+    /// Calculate how much we're going to send based on the file size and the range
+    int getSendSize() {
+        int end = getEnd();
+        int start = getStart();
+
+        if (start > _size) return 0;
+
+        return end - start;
     }
 
     void asyncShutdown()
@@ -1619,13 +1741,13 @@ private:
                 LOG_TRC("Connected");
                 _connected = true;
 
-                LOG_DBG("Sending header with size " << _size);
-                http::Response httpResponse(http::StatusCode::OK);
-                httpResponse.set("Content-Length", std::to_string(_size));
+                LOG_DBG("Sending header with size " << getSendSize());
+                http::Response httpResponse(_statusCode);
+                httpResponse.set("Content-Length", std::to_string(getSendSize()));
                 httpResponse.set("Content-Type", _mimeType);
-                httpResponse.set("accept-ranges", "bytes");
-                httpResponse.set("Content-Range", "bytes 0-" + std::to_string(_size - 1) + '/' +
-                                                      std::to_string(_size));
+                httpResponse.set("Accept-Ranges", "bytes");
+                httpResponse.set("Content-Range", "bytes " + std::to_string(getStart()) + "-" + std::to_string(getEnd() - 1) + '/' +
+                                    std::to_string(_size));
 
                 socket->send(httpResponse);
                 return;
@@ -1693,14 +1815,14 @@ private:
             {
                 //FIXME: replace with in-place read into the output buffer.
                 char buffer[64 * 1024];
-                const auto size = std::min(sizeof(buffer), capacity);
+                const auto size = std::min({sizeof(buffer), capacity, (size_t)(getEnd() - _pos)});
                 int n;
                 while ((n = ::read(_fd, buffer, size)) < 0 && errno == EINTR)
                     LOG_TRC("EINTR reading from " << _data);
 
-                if (n <= 0)
+                if (n <= 0 || _pos >= getEnd())
                 {
-                    if (n == 0)
+                    if (n >= 0)
                     {
                         LOG_TRC("performWrites finished uploading");
                     }
@@ -1716,6 +1838,7 @@ private:
                 }
 
                 _socket->send(buffer, n);
+                _pos += n;
                 LOG_ASSERT(static_cast<std::size_t>(n) <= capacity);
                 capacity -= n;
                 LOG_TRC("performWrites wrote " << n << " bytes, capacity: " << capacity);
@@ -1750,6 +1873,17 @@ private:
     int _size; //< The size of the data in bytes.
     int _fd; //< The descriptor of the file to upload.
     bool _connected;
+    int _start; //< The position we start reading from, the data includes this first byte
+                //  If this is greater than _size we will return no bytes
+                //  If this is less than 0 or greater than _end behavior is unspecified
+    int _end; //< The position we stop reading at, the data does not include this last byte
+              //  If this is greater than or equal to _start we will only return bytes in the range
+              //  If this is greater than _size we will return all bytes between _start and _size
+              //  If this is -1 we will treat it as if it were equal to _size
+    bool _startIsSuffix; //< If this is true, we'll treat _start as an offset from the end, not from the start
+                         //  In that case, we'll ignore end entirely
+                         //  e.g. if this is true and start is 5, we will send the last 5 bytes
+    http::StatusCode _statusCode;
     FinishedCallback _onFinished;
     std::shared_ptr<StreamSocket> _socket; //< Must be the last member.
 };
@@ -1757,23 +1891,20 @@ private:
 
 inline std::ostream& operator<<(std::ostream& os, const http::Header& header)
 {
-    for (const auto& pair : header)
-    {
-        os << '\t' << pair.first << ": " << pair.second << " / ";
-    }
+    Util::joinPair(os, header, " / ");
 
     return os;
 }
 
 inline std::ostream& operator<<(std::ostream& os, const http::StatusCode& statusCode)
 {
-    os << getReasonPhraseForCode(statusCode);
+    os << static_cast<int>(statusCode) << " (" << getReasonPhraseForCode(statusCode) << ')';
     return os;
 }
 
 inline std::ostringstream& operator<<(std::ostringstream& os, const http::StatusCode& statusCode)
 {
-    os << getReasonPhraseForCode(statusCode);
+    os << static_cast<int>(statusCode) << " (" << getReasonPhraseForCode(statusCode) << ')';
     return os;
 }
 
