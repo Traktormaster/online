@@ -525,7 +525,7 @@ app.definitions.Socket = L.Class.extend({
 		if (index < 0)
 			index = e.imgBytes.length;
 
-		e.textMsg = String.fromCharCode.apply(null, e.imgBytes.subarray(0, index));
+		e.textMsg = this._strFromUint8('', e.imgBytes.subarray(0, index));
 
 		e.imgIndex = index + 1;
 	},
