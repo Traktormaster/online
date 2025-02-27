@@ -476,6 +476,14 @@ else
     AC_MSG_RESULT([no (Release build)])
     AC_DEFINE([ENABLE_DEBUG],0,[Whether to compile in some extra debugging support code and disable some security pieces])
     AC_DEFINE([CONFIG_STATIC],static,[Static config values are enabled in release builds for performance])
+    AC_MSG_CHECKING([whether to bundle JS and CSS files])
+    if test "$enable_bundle" != "yes"; then
+       ENABLE_BUNDLE=false
+       bundle_msg="using individual JS and CSS files"
+       AC_MSG_RESULT([no ($bundle_msg)])
+    else
+       AC_MSG_RESULT([yes])
+    fi
 fi
 AC_SUBST(ENABLE_DEBUG)
 AC_SUBST(ENABLE_BUNDLE)
