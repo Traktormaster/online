@@ -17,13 +17,6 @@ function getActiveSocket() {
 		return window.app.socket.socket;
 	return window.socket;
 }
-// Load access-token from URL fragment if not set already.
-if (!window.accessToken && location.hash) {
-	var tmp = location.hash.indexOf('!');
-	if (tmp > 0 && location.hash.substring(1, tmp) === 'at') {
-		window.accessToken = location.hash.substring(tmp+1);
-	}
-}
 // Extra utilities.
 window.concatByteArray = function(params) {
   var size = 0;
@@ -575,6 +568,13 @@ class InitializerBase {
 		window.hexifyUrl = false;
 		window.versionPath = "";
 		window.accessToken = element.dataset.accessToken;
+		// Load access-token from URL fragment if not set already.
+		if (!window.accessToken && location.hash) {
+			var tmp = location.hash.indexOf('!');
+			if (tmp > 0 && location.hash.substring(1, tmp) === 'at') {
+				window.accessToken = location.hash.substring(tmp+1);
+			}
+		}
 		window.accessTokenTTL = element.dataset.accessTokenTtl;
 		window.accessHeader = element.dataset.accessHeader;
 		window.postMessageOriginExt = "";
