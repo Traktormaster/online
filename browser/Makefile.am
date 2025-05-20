@@ -923,6 +923,7 @@ install-data-hook:
 	mkdir -p $(DESTDIR)$(pkgdatadir)/browser; \
 	cp -a dist/ $(DESTDIR)$(pkgdatadir)/browser/;
 else
+if ENABLE_BUNDLE
 install-data-hook:
 	mkdir -p $(DESTDIR)$(pkgdatadir)/browser; \
 	rsync -a --exclude='src' \
@@ -938,6 +939,11 @@ install-data-hook:
 	cp -a dist/src/layer/tile/TileWorker.js $(DESTDIR)$(pkgdatadir)/browser/dist/src/layer/tile/TileWorker.js;
 if ENABLE_WASM
 	find $(DESTDIR)$(pkgdatadir)/browser/dist -type f ! -iname "*.png" -exec brotli --force {} \;
+endif
+else
+install-data-hook:
+	mkdir -p $(DESTDIR)$(pkgdatadir)/browser; \
+	cp -a dist/ $(DESTDIR)$(pkgdatadir)/browser/;
 endif
 endif
 

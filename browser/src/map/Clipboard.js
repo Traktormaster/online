@@ -885,8 +885,7 @@ L.Clipboard = L.Class.extend({
 		} else {
 			const url = this.getMetaURL() + '&MimeType=text/html,text/plain;charset=utf-8';
 
-			var result = await fetch(url);
-			var text = await result.text();
+			var text = await window.newHttpFetcher(url);
 
 			const clipboardItem = new ClipboardItem({
 				'text/html': this._parseClipboardFetchResult(text, 'text/html', 'html'),

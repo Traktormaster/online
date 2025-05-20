@@ -77,9 +77,8 @@ window.ParentFrameSocket = function(uri) {
 	};
 
 	this._handleMessage = function(data) {
-		// NOTE: we could assume that data is Uint8Array, because the proxy transport is binary-only
-		if (data instanceof Uint8Array && data.length >= 16) {
-			if (data[0] == 110 && data[1] == 97 && data[2] == 110 && data[3] == 111 && data[4] == 104 && data[5] == 116 && data[6] == 116 && data[7] == 112 && data[8] == 112 && data[9] == 114 && data[10] == 111 && data[11] == 120 && data[12] == 121 && data[13] == 32) {
+		// NOTE: we assume that data is Uint8Array, because the proxy transport is binary-only
+		if (data.length >= 16 && data[0] == 110 && data[1] == 97 && data[2] == 110 && data[3] == 111 && data[4] == 104 && data[5] == 116 && data[6] == 116 && data[7] == 112 && data[8] == 112 && data[9] == 114 && data[10] == 111 && data[11] == 120 && data[12] == 121 && data[13] == 32) {
 				// data starts with "nanohttpproxy "
 				var opNewlinePos = data.indexOf(10, 14);
 				if (opNewlinePos === -1) {
@@ -108,7 +107,10 @@ window.ParentFrameSocket = function(uri) {
 				}
 				boundRequest.handleResponse(respHead, data.slice(headNewlinePos + 1));
 				return;
-			}
+		}
+		if (data.length >= 11 && data[0] == 110 && data[1] == 97 && data[2] == 110 && data[3] == 111 && data[4] == 119 && data[5] == 115 && data[6] == 116 && data[7] == 101 && data[8] == 120 && data[9] == 116 && data[10] == 32) {
+			// data starts with "nanowstext "
+			data = (new TextDecoder()).decode(data.slice(11));
 		}
 		// give message to ws client by default
 		this.onmessage({'data': data});
@@ -327,6 +329,32 @@ window.newHttpRequester = function() {
         return new window.ParentFrameSocketHTTPRequest();
     }
 	return new XMLHttpRequest();
+};
+window.newHttpFetcher = async function(url) {
+    if (window.useParentFrameSocket) {
+		const req_ = new window.ParentFrameSocketHTTPRequest();
+		return await (new Promise((resolve, reject) => {
+			req_.onload = () => {
+				if (req_.status == 200) {
+					resolve(req_.responseText);
+				} else {
+					reject(req_.response);
+				}
+			};
+			req_.onerror = (error) => {
+				reject(error);
+			};
+			req_.ontimeout = () => {
+				reject('fetch timed out');
+			};
+			req_.open('GET', url, true /* isAsync */);
+			req_.timeout = 30 * 1000; // 30 secs ...
+			req_.responseType = 'text';
+			req_.send();
+		}));
+    }
+	var result = await fetch(url);
+	return await result.text();
 };
 if (window.useParentFrameSocket) {
 	var ParentFrameSocketMessageListener = function(e) {
@@ -2076,6 +2104,13 @@ function getInitializerClass() {
 	global.makeHttpUrl = function (path) {
 		global.app.console.assert(global.webserver.startsWith('http'), 'webserver is not http: ' + global.webserver);
 		return global.webserver + global.serviceRoot + path;
+	};
+
+	// Form a valid HTTP URL to the host serving the client application. (matches wsd host in native setup)
+	global.makeClientHttpUrl = function (path) {
+		var webserver = window.location.origin;
+		global.app.console.assert(webserver.startsWith('http'), 'origin is not http: ' + webserver);
+		return webserver + global.serviceRoot + path;
 	};
 
 	// Form a valid HTTP URL to the host with the given path and

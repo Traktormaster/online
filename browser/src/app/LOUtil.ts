@@ -177,7 +177,9 @@ class LOUtil {
 		if (customWindow.host === '' && customWindow.serviceRoot === '')
 			return path; // mobile app
 
-		let url = customWindow.makeHttpUrl('/browser/' + customWindow.versionPath);
+		let url = customWindow.makeClientHttpUrl(
+			'/browser/' + customWindow.versionPath,
+		);
 		if (path.substr(0, 1) !== '/') url += '/';
 
 		url += path;

@@ -45,7 +45,7 @@ L.Map = L.Evented.extend({
 		tileHeightTwips: window.tileSize * 15,
 		urlPrefix: 'cool',
 		wopiSrc: '',
-		cursorURL: app.LOUtil.getURL('cursors'),
+		cursorURL: app.LOUtil.getURL('images/cursors'),
 		// cursorURL
 		// The path (local to the server) where custom cursor files are stored.
 	},

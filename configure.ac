@@ -1331,6 +1331,7 @@ AS_IF([test "$webkit_try_older" = true],
       [PKG_CHECK_MODULES([WEBKIT],[webkit2gtk-4.0])])
 
 AM_CONDITIONAL([ENABLE_DEBUG], [test "$ENABLE_DEBUG" = "true"])
+AM_CONDITIONAL([ENABLE_BUNDLE], [test "ENABLE_BUNDLE" = "true"])
 
 mobile_app=
 ENABLE_MOBILEAPP=

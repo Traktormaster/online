@@ -450,7 +450,7 @@ L.Control.UIManager = L.Control.extend({
 	initializeSidebar: function() {
 		// Hide the sidebar on start if saved state or UIDefault is set.
 		if (window.mode.isDesktop() && !window.ThisIsAMobileApp) {
-			var showSidebar = this.getBooleanDocTypePref('ShowSidebar', true);
+			var showSidebar = this.getBooleanDocTypePref('ShowSidebar', false);
 
 			if (this.getBooleanDocTypePref('PropertyDeck', true)) {
 				app.socket.sendMessage('uno .uno:SidebarShow');
